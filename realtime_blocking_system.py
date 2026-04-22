@@ -25,11 +25,11 @@ from datetime import datetime
 # Add modules to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from packet_capture import RealTimePacketSniffer, PacketProcessor
-from feature_engineering import FeatureEngineeringEngine
-from realtime_engine import RealtimeInferenceEngine
-from decision_engine import DecisionEngine, DecisionPolicy
-from dns_blocker import get_hosts_manager
+from modules.packet_capture import RealTimePacketSniffer
+from modules.feature_engineering import FeatureEngineeringEngine
+from modules.realtime_engine import RealtimeInferenceEngine
+from modules.decision_engine import DecisionEngine, DecisionPolicy
+from modules.dns_blocker import get_hosts_manager
 
 logging.basicConfig(
     level=logging.INFO,

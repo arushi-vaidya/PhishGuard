@@ -27,7 +27,7 @@ from email.mime.multipart import MIMEMultipart
 
 # Import DNS blocker
 try:
-    from dns_blocker import block_phishing_domain, unblock_phishing_domain, get_hosts_manager
+    from .dns_blocker import block_phishing_domain, unblock_phishing_domain, get_hosts_manager
     DNS_BLOCKER_AVAILABLE = True
 except ImportError:
     DNS_BLOCKER_AVAILABLE = False

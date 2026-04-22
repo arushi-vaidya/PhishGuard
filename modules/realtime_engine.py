@@ -19,13 +19,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from packet_capture import (
+from .packet_capture import (
     RealTimePacketSniffer,
     DNSPacketData,
     TLSPacketData,
     TrafficFlowData,
 )
-from feature_engineering import FeatureEngineeringEngine
+from .feature_engineering import FeatureEngineeringEngine
 
 logging.basicConfig(
     level=logging.INFO,

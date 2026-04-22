@@ -23,7 +23,7 @@ from collections import defaultdict
 from datetime import datetime
 import statistics
 
-from packet_capture import (
+from .packet_capture import (
     DNSPacketData, 
     TLSPacketData, 
     TrafficFlowData

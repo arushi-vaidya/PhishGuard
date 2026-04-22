@@ -1,0 +1,402 @@
+[
+  {
+    "domain": "paypal-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "phishing",
+    "gemini_confidence": 0.5,
+    "gemini_reasoning": "Fallback heuristic (Gemini unavailable)",
+    "match": true
+  },
+  {
+    "domain": "amazon-account-update.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "phishing",
+    "gemini_confidence": 0.5,
+    "gemini_reasoning": "Fallback heuristic (Gemini unavailable)",
+    "match": true
+  },
+  {
+    "domain": "apple-id-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "phishing",
+    "gemini_confidence": 0.5,
+    "gemini_reasoning": "Fallback heuristic (Gemini unavailable)",
+    "match": true
+  },
+  {
+    "domain": "microsoft-security-check.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "google-signin-security.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "facebook-login-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "bank-of-america-security.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "wells-fargo-update.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "chase-banking-secure.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "citibank-signin.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "linkedin-profile-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "dropbox-verify-account.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "onedrive-login-secure.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "icloud-apple-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "spotify-account-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "netflix-update-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "uber-verify-account.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "airbnb-security-check.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "payoneer-verify.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "stripe-verify-account.com",
+    "phishtank_label": "phishing",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "google.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "gmail.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "youtube.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "facebook.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "instagram.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "twitter.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "linkedin.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "github.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "stackoverflow.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "wikipedia.org",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "amazon.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "ebay.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "apple.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "microsoft.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "netflix.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "spotify.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "reddit.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "medium.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "wordpress.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "wordpress.org",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "weebly.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "wix.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "shopify.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "stripe.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "paypal.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "zendesk.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "salesforce.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "slack.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "discord.com",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  },
+  {
+    "domain": "twitch.tv",
+    "phishtank_label": "legitimate",
+    "gemini_label": "unknown",
+    "gemini_confidence": 0.0,
+    "gemini_reasoning": "Error: [Errno 32] Broken pipe",
+    "match": false
+  }
+]

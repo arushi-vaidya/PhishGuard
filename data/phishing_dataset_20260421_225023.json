@@ -1,0 +1,44 @@
+[
+  {
+    "domain": "google.com",
+    "destination_ip": "142.250.185.46",
+    "sni": "google.com",
+    "timestamp": 1776792023.351281,
+    "label": "legitimate"
+  },
+  {
+    "domain": "github.com",
+    "destination_ip": "140.82.113.21",
+    "sni": "github.com",
+    "timestamp": 1776792023.351295,
+    "label": "legitimate"
+  },
+  {
+    "domain": "amazon.com",
+    "destination_ip": "54.239.28.30",
+    "sni": "amazon.com",
+    "timestamp": 1776792023.351302,
+    "label": "legitimate"
+  },
+  {
+    "domain": "google-login.com",
+    "destination_ip": "185.25.51.205",
+    "sni": "google-login.com",
+    "timestamp": 1776792023.351311,
+    "label": "phishing"
+  },
+  {
+    "domain": "paypal-verify.com",
+    "destination_ip": "185.225.69.24",
+    "sni": "paypal-verify.com",
+    "timestamp": 1776792023.351317,
+    "label": "phishing"
+  },
+  {
+    "domain": "amazon-account.com",
+    "destination_ip": "45.152.72.200",
+    "sni": "amazon-account.com",
+    "timestamp": 1776792023.351323,
+    "label": "phishing"
+  }
+]

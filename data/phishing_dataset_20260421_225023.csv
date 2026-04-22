@@ -1,0 +1,7 @@
+destination_ip,domain,label,sni,timestamp
+142.250.185.46,google.com,legitimate,google.com,1776792023.351281
+140.82.113.21,github.com,legitimate,github.com,1776792023.351295
+54.239.28.30,amazon.com,legitimate,amazon.com,1776792023.351302
+185.25.51.205,google-login.com,phishing,google-login.com,1776792023.351311
+185.225.69.24,paypal-verify.com,phishing,paypal-verify.com,1776792023.351317
+45.152.72.200,amazon-account.com,phishing,amazon-account.com,1776792023.351323

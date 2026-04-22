@@ -138,49 +138,44 @@ class RealtimeBlockingSystem:
         logger.info("\nPress Ctrl+C to stop\n")
         
         try:
+            # Register callbacks for packet types
+            self.packet_sniffer.register_callback('dns', self._process_dns_traffic)
+            self.packet_sniffer.register_callback('tls', self._process_tls_traffic)
+            
             # Start packet capture
             start_time = time.time()
-            packet_count = 0
+            self.packet_sniffer.start()
             
+            # Let it run for timeout seconds
             while time.time() - start_time < timeout:
-                # Capture packets
-                packets = self.packet_sniffer.sniff_packets(timeout=1, packet_count=10)
-                
-                if not packets:
-                    continue
-                
-                # Process each packet
-                for packet in packets:
-                    packet_count += 1
-                    
-                    # Process packet
-                    dns_data, tls_data, flow_data = self.packet_sniffer.processor.process_packet(packet)
-                    
-                    # Check each data type
-                    if dns_data:
-                        self._process_dns_traffic(dns_data, packet_count)
-                    
-                    if tls_data:
-                        self._process_tls_traffic(tls_data, packet_count)
+                time.sleep(0.1)
+            
+            # Stop capture
+            self.packet_sniffer.stop()
             
             # Summary
             return self._print_summary(time.time() - start_time)
             
         except KeyboardInterrupt:
             logger.info("\n\n⏹ Capture stopped by user")
+            self.packet_sniffer.stop()
             return self._print_summary(time.time() - start_time)
         except Exception as e:
             logger.error(f"❌ Error during capture: {e}")
+            self.packet_sniffer.stop()
             raise
     
-    def _process_dns_traffic(self, dns_data: Dict, packet_num: int):
+    def _process_dns_traffic(self, dns_data):
         """Process DNS traffic and make blocking decision"""
         try:
-            domain = dns_data.get('domain', '')
+            domain = dns_data.get('domain', '') if isinstance(dns_data, dict) else getattr(dns_data, 'domain', '')
             if not domain:
                 return
             
-            logger.info(f"\n[Packet #{packet_num}] DNS Query: {domain}")
+            # Increment packet counter
+            self.packet_num = getattr(self, 'packet_num', 0) + 1
+            
+            logger.info(f"\n[Packet #{self.packet_num}] DNS Query: {domain}")
             
             # Skip already processed
             if domain in self.safe_domains or domain in self.blocked_domains:
@@ -226,14 +221,17 @@ class RealtimeBlockingSystem:
         except Exception as e:
             logger.error(f"  ✗ Error processing DNS: {e}")
     
-    def _process_tls_traffic(self, tls_data: Dict, packet_num: int):
+    def _process_tls_traffic(self, tls_data):
         """Process TLS traffic and make blocking decision"""
         try:
-            domain = tls_data.get('sni', '')
+            domain = tls_data.get('sni', '') if isinstance(tls_data, dict) else getattr(tls_data, 'sni', '')
             if not domain:
                 return
             
-            logger.info(f"\n[Packet #{packet_num}] TLS SNI: {domain}")
+            # Increment packet counter
+            self.packet_num = getattr(self, 'packet_num', 0) + 1
+            
+            logger.info(f"\n[Packet #{self.packet_num}] TLS SNI: {domain}")
             
             # Skip already processed
             if domain in self.safe_domains or domain in self.blocked_domains:

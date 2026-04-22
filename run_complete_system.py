@@ -158,11 +158,15 @@ def run_real_blocking():
         return
     
     print(f"\n{Colors.BOLD}{Colors.GREEN}▶ Starting Real-Time Blocking with DNS Modifications...{Colors.END}\n")
+    print(f"{Colors.CYAN}(You may be prompted for your password){Colors.END}\n")
     
-    cmd = "source env/bin/activate && sudo python3 realtime_blocking_system.py --interface en0 --timeout 60"
+    cmd = "cd '{}' && source env/bin/activate && sudo python3 realtime_blocking_system.py --interface en0 --timeout 60".format(Path.cwd())
     
     try:
-        subprocess.run(cmd, shell=True, cwd=str(Path.cwd()), executable='/bin/zsh')
+        # Use os.system() instead of subprocess to properly handle TTY for sudo password prompt
+        result = os.system(cmd)
+        if result != 0 and result != -2:  # -2 is KeyboardInterrupt signal
+            print(f"\n{Colors.YELLOW}⚠️  Command exited with code {result}{Colors.END}")
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}✓ Blocking stopped{Colors.END}\n")
 
@@ -272,11 +276,15 @@ def clear_all_blocks():
         print(f"{Colors.YELLOW}Cancelled{Colors.END}\n")
         return
     
-    cmd = "source env/bin/activate && python3 -c \"from modules.dns_blocker import get_hosts_manager; get_hosts_manager().clear_all_blocks()\""
+    cmd = "cd '{}' && source env/bin/activate && sudo python3 -c \"from modules.dns_blocker import get_hosts_manager; get_hosts_manager().clear_all_blocks()\"".format(Path.cwd())
     
     try:
-        subprocess.run(f"sudo {cmd}", shell=True, cwd=str(Path.cwd()), executable='/bin/zsh')
-        print(f"\n{Colors.GREEN}✓ Blocks cleared{Colors.END}\n")
+        # Use os.system() to properly handle TTY for sudo password prompt
+        result = os.system(cmd)
+        if result == 0:
+            print(f"\n{Colors.GREEN}✓ Blocks cleared{Colors.END}\n")
+        else:
+            print(f"\n{Colors.YELLOW}⚠️  Command exited with code {result}{Colors.END}\n")
     except Exception as e:
         print(f"\n{Colors.RED}✗ Error: {e}{Colors.END}\n")
 

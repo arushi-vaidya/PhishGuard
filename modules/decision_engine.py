@@ -7,6 +7,7 @@ This module:
 3. Executes preventive actions (DNS block, alert, log, etc.)
 4. Maintains audit trail of all decisions
 5. Integrates with system-level security controls
+6. Performs REAL DNS blocking via /etc/hosts or firewall
 
 Author: Research Team
 Date: 2026
@@ -23,6 +24,14 @@ import smtplib
 import numpy as np
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# Import DNS blocker
+try:
+    from dns_blocker import block_phishing_domain, unblock_phishing_domain, get_hosts_manager
+    DNS_BLOCKER_AVAILABLE = True
+except ImportError:
+    DNS_BLOCKER_AVAILABLE = False
+    block_phishing_domain = None
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +276,7 @@ class DecisionEngine:
             self._send_email_alert(event)
     
     def _handle_block_dns(self, event: DetectionEvent):
-        """Block at DNS level"""
+        """Block at DNS level using /etc/hosts modification"""
         logger.critical(
             f"🛑 BLOCKING (DNS): {event.domain} | "
             f"Confidence: {event.confidence:.2%} | "
@@ -277,9 +286,30 @@ class DecisionEngine:
         # Notify user of block
         self._handle_notify(event)
         
-        # In production: Call actual DNS blocking mechanism
-        # Example: update /etc/hosts, configure firewall, call DNS service API
-        self._simulate_dns_block(event)
+        # Use real DNS blocking
+        if DNS_BLOCKER_AVAILABLE and block_phishing_domain:
+            try:
+                result = block_phishing_domain(
+                    domain=event.domain,
+                    ip_address=event.destination_ip,
+                    use_hosts=True,
+                    use_firewall=False
+                )
+                
+                if result.get('hosts'):
+                    logger.info(f"  ✓ REAL DNS BLOCK APPLIED: {event.domain} redirected to 127.0.0.1")
+                    logger.info(f"  → All connections to {event.domain} will now resolve to localhost")
+                else:
+                    logger.warning(f"  ⚠ DNS block failed (likely permission issue)")
+                    logger.info(f"  → Run with 'sudo' to enable real DNS blocking")
+                    self._simulate_dns_block(event)
+            except Exception as e:
+                logger.error(f"  ✗ Error in DNS blocking: {e}")
+                self._simulate_dns_block(event)
+        else:
+            logger.warning(f"  ⚠ DNS blocker not available, using simulation")
+            self._simulate_dns_block(event)
+    
     
     def _handle_block_network(self, event: DetectionEvent):
         """Block at network level"""
@@ -360,11 +390,12 @@ class DecisionEngine:
         self.stats['events_logged'] += 1
     
     def _simulate_dns_block(self, event: DetectionEvent):
-        """Simulate DNS block (for testing)"""
+        """Simulate DNS block (for testing or when real blocking fails)"""
         block_file = self.log_dir / "blocked_domains.txt"
         with open(block_file, 'a') as f:
             f.write(f"{event.destination_ip} {event.domain} # {datetime.now()}\n")
         logger.info(f"  → Simulated DNS block: {event.domain} ({event.destination_ip})")
+    
     
     def _simulate_network_block(self, event: DetectionEvent):
         """Simulate network block (for testing)"""

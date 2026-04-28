@@ -80,8 +80,14 @@ class DataPreprocessor:
         """
         logger.info("Preparing features...")
         
-        # Drop non-feature columns
-        drop_cols = ['domain', 'destination_ip', 'sni', 'timestamp', 'label']
+        # Drop non-feature columns.
+        # Absolute timestamps are dropped: their values differ between training and
+        # inference (different wall-clock times), causing the scaler to produce
+        # out-of-range values at prediction time.  Use dns_to_tls_delay instead.
+        drop_cols = [
+            'domain', 'destination_ip', 'sni', 'timestamp', 'label',
+            'session_dns_query_timestamp', 'session_tls_handshake_timestamp',
+        ]
         X = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
         
         # Drop string/object columns (non-numeric)
@@ -149,7 +155,8 @@ class ModelTrainer:
             max_depth=max_depth,
             random_state=random_state,
             n_jobs=-1,
-            verbose=0
+            verbose=0,
+            class_weight='balanced',  # corrects for phishing-heavy datasets
         )
         
         model.fit(X_train, y_train)

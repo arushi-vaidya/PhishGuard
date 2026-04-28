@@ -21,16 +21,16 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse
 
-sys.path.insert(0, str(Path(__file__).parent / "modules"))
+sys.path.insert(0, str(Path(__file__).parent))
 
-from packet_capture import (
+from modules.packet_capture import (
     RealTimePacketSniffer,
     DNSPacketData,
     TLSPacketData,
     TrafficFlowData,
     PacketCaptureConfig
 )
-from feature_engineering import (
+from modules.feature_engineering import (
     FeatureEngineeringEngine,
 )
 
@@ -402,7 +402,7 @@ def main():
     print(f"✓ Using {len(legitimate_domains)} known legitimate domains")
     
     # Build dataset with feature engineering
-    from feature_engineering import FeatureEngineeringEngine
+    from modules.feature_engineering import FeatureEngineeringEngine
     
     engine = FeatureEngineeringEngine()
     all_features = []

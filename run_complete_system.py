@@ -153,7 +153,7 @@ def main():
     try:
         # Start Dashboard (no sudo needed)
         print(f"{Colors.GREEN}✓ Starting Dashboard...{Colors.END}")
-        dashboard_cmd = f"source env/bin/activate && python3 dashboard.py --port {dashboard_port}"
+        dashboard_cmd = f"source venv/bin/activate && python3 dashboard.py --port {dashboard_port}"
         dashboard_proc = subprocess.Popen(
             dashboard_cmd,
             shell=True,
@@ -173,7 +173,7 @@ def main():
         print(f"{Colors.CYAN}DNS Blocking: ENABLED{Colors.END}")
         print(f"{Colors.CYAN}Auto-block Threshold: 80%{Colors.END}\n")
         
-        monitoring_cmd = f"cd '{Path.cwd()}' && source env/bin/activate && sudo python3 realtime_blocking_system.py --timeout 86400"
+        monitoring_cmd = f"cd '{Path.cwd()}' && source venv/bin/activate && sudo venv/bin/python3 realtime_blocking_system.py --timeout 86400"
         monitoring_proc = subprocess.Popen(
             monitoring_cmd,
             shell=True,

@@ -277,50 +277,55 @@ class RealtimeBlockingSystem:
             logger.error(f"  ✗ Error processing TLS: {e}")
     
     def _clean_sni(self, sni: str) -> str:
-        """Aggressively clean SNI to extract valid domain name"""
+        """Extract a valid domain name from a raw SNI value, rejecting binary garbage."""
         if not sni:
             return ""
-        
+
         sni = str(sni).strip()
-        
-        # Remove common protocol/header garbage that appears in binary packets
-        garbage_patterns = ['http/1.1', 'h2c', 'h2+', 'h2', '%#', '#%#', '::', '#']
-        for pattern in garbage_patterns:
-            sni = sni.replace(pattern, ' ')
-        
-        # Extract only ASCII alphanumeric, dots, hyphens
-        # Stop at first non-ASCII or whitespace character (indicates binary data)
-        cleaned = ""
-        for c in sni:
-            # Stop if we hit non-ASCII (corrupted packet data)
-            if ord(c) > 127:
-                break
-            # Stop if we hit whitespace or control characters
-            if c in '\n\r\t ' and cleaned:
-                break
-            # Keep valid domain characters
-            if c.isalnum() or c in '.-':
-                cleaned += c
-        
-        cleaned = cleaned.strip('.-')
-        
-        # Must contain at least one dot and be reasonable length
-        if '.' not in cleaned or len(cleaned) < 4 or len(cleaned) > 253:
+
+        # Immediately reject if non-printable / non-ASCII bytes are present
+        if any(ord(c) > 127 or ord(c) < 32 for c in sni):
             return ""
-        
-        # Check if it looks like a domain
+
+        # Reject anything that looks like an HTTP/ALPN protocol token
+        noise = ['http/1.1', 'h2c', 'h2+', 'h2', 'http/', 'spdy', 'quic']
+        low = sni.lower()
+        if any(n in low for n in noise):
+            return ""
+
+        # Keep only valid hostname characters
+        import re
+        cleaned = re.sub(r'[^a-zA-Z0-9.\-]', '', sni).strip('.-')
+
+        # Basic structural checks
+        if not cleaned or '.' not in cleaned:
+            return ""
+        if len(cleaned) < 4 or len(cleaned) > 253:
+            return ""
+
         parts = cleaned.split('.')
         if len(parts) < 2:
             return ""
-        
-        # Each part must be alphanumeric + hyphens, not pure numbers
+
+        # Validate each label
+        label_re = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$')
         for part in parts:
-            if not part or len(part) > 63:
+            if not part or not label_re.match(part):
                 return ""
-            if not any(c.isalpha() for c in part):  # Must have at least one letter
+            # Reject purely numeric labels (IP addresses)
+            if part.isdigit():
                 return ""
-        
-        return cleaned
+
+        # TLD must be alphabetic only (no numbers)
+        if not parts[-1].isalpha():
+            return ""
+
+        # Reject domains that start with a digit in the first label
+        # (real SNI hostnames virtually never do — those are garbage)
+        if parts[0][0].isdigit():
+            return ""
+
+        return cleaned.lower()
     
     def _get_value(self, obj, key: str, default=''):
         """Safely get value from dict or dataclass, cleaning non-printable chars"""

@@ -185,9 +185,35 @@ class DNSFeatureExtractor:
         """
         self.phishing_domains = set(phishing_domains or [])
         self.legitimate_domains = set([
-            'google.com', 'facebook.com', 'amazon.com', 'github.com',
-            'microsoft.com', 'apple.com', 'youtube.com', 'twitter.com'
+            # Big tech
+            'google.com', 'youtube.com', 'gmail.com', 'facebook.com',
+            'instagram.com', 'whatsapp.com', 'apple.com', 'icloud.com',
+            'microsoft.com', 'office.com', 'live.com', 'outlook.com',
+            'amazon.com', 'aws.amazon.com', 'github.com', 'gitlab.com',
+            'twitter.com', 'x.com', 'linkedin.com', 'reddit.com',
+            # Cloud / SaaS
+            'slack.com', 'zoom.us', 'dropbox.com', 'notion.so',
+            'atlassian.com', 'salesforce.com', 'stripe.com', 'shopify.com',
+            'cloudflare.com', 'fastly.com', 'googleapis.com', 'gstatic.com',
+            # Dev
+            'stackoverflow.com', 'npmjs.com', 'pypi.org', 'docker.com',
+            # Media / news
+            'wikipedia.org', 'nytimes.com', 'bbc.com', 'cnn.com',
+            'netflix.com', 'spotify.com', 'twitch.tv',
+            # Finance (real)
+            'paypal.com', 'chase.com', 'bankofamerica.com', 'wellsfargo.com',
+            # E-commerce
+            'ebay.com', 'etsy.com', 'walmart.com',
+            # Search
+            'bing.com', 'duckduckgo.com', 'yahoo.com',
         ])
+
+        # Phishing keyword signals — domains containing these are suspicious
+        self._phishing_keywords = [
+            'verify', 'confirm', 'update', 'secure', 'login', 'signin',
+            'account', 'billing', 'payment', 'alert', 'urgent', 'suspended',
+            'locked', 'unusual', 'activity', 'recover', 'restore', 'validate',
+        ]
         self.domain_queries = defaultdict(list)  # Track query history
     
     def extract(self, dns_data: DNSPacketData) -> DomainFeatures:
@@ -543,26 +569,52 @@ class FeatureEngineeringEngine:
         )
     
     def _synthesize_dns_features(self, domain: str) -> DomainFeatures:
-        """Generate synthetic DNS features from domain name"""
-        # Calculate entropy
-        entropy = self._calculate_entropy(domain)
-        
-        # Count subdomains
-        subdomain_count = domain.count('.') - 1 if '.' in domain else 0
-        
+        """Generate DNS features from domain name alone (no live packet required)."""
+        d = domain.lower().strip()
+        entropy = self._calculate_entropy(d)
+        parts = d.split('.')
+        # Number of labels minus TLD and SLD
+        subdomain_count = max(0, len(parts) - 2)
+
+        # Use the dns_extractor's domain lists (defined in DNSFeatureExtractor.__init__)
+        extractor = self.dns_extractor
+        is_legitimate = d in extractor.legitimate_domains or any(
+            d == leg or d.endswith('.' + leg) for leg in extractor.legitimate_domains
+        )
+        is_phishing = d in extractor.phishing_domains
+
+        # Phishing keyword count — distinct from has_suspicious_chars
+        keyword_hits = sum(1 for kw in extractor._phishing_keywords if kw in d)
+
+        # Brands that appear in domains they don't own → impersonation signal
+        brand_names = ['paypal', 'amazon', 'apple', 'microsoft', 'google',
+                       'facebook', 'netflix', 'instagram', 'twitter', 'chase',
+                       'wellsfargo', 'bankofamerica', 'linkedin', 'dropbox']
+        brand_in_nonbrand = any(
+            brand in d and not (d == brand + '.com' or d.endswith('.' + brand + '.com'))
+            for brand in brand_names
+        )
+
+        # Reuse has_suspicious_chars to encode phishing keyword count > 0
+        has_suspicious = keyword_hits > 0 or brand_in_nonbrand
+
+        # TTL heuristic: phishing domains often use very short TTLs
+        # Without real data we use a heuristic: suspicious domains get low synthetic TTL
+        ttl = 120 if has_suspicious else 3600
+
         return DomainFeatures(
-            domain_length=len(domain),
+            domain_length=len(d),
             subdomain_count=subdomain_count,
             domain_entropy=entropy,
-            has_numbers_in_domain=any(c.isdigit() for c in domain),
-            has_hyphens_in_domain='-' in domain,
-            has_suspicious_chars=any(c in domain for c in ['_', '~', '!', '$', '&']),
-            ttl_value=3600,  # Default TTL
+            has_numbers_in_domain=any(c.isdigit() for c in d),
+            has_hyphens_in_domain='-' in d,
+            has_suspicious_chars=has_suspicious,
+            ttl_value=ttl,
             query_type='A',
             query_frequency=1,
             ttl_variance=0.0,
-            is_known_phishing=False,
-            is_known_legitimate=False
+            is_known_phishing=is_phishing,
+            is_known_legitimate=is_legitimate,
         )
     
     def _synthesize_tls_features(self, domain: str, sni: str) -> TLSFeatures:

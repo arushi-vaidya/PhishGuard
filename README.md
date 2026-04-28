@@ -1,5 +1,17 @@
 # Pre-Connection Phishing Detection Using Encrypted Traffic Fingerprinting
 
+## Recent Changes (dev branch)
+
+### Latest Updates
+
+- **Real-time blocking system** (`realtime_blocking_system.py`): Rewrote packet sniffer integration to use the correct `start()`/`stop()` API with callbacks instead of a direct `sniff()` call.
+- **Module imports**: Switched all internal module imports to relative imports (`.`) to fix package resolution errors across `modules/`.
+- **`run_complete_system.py`**: Choice 4 (run complete system) now uses `os.system()` for proper sudo TTY handling instead of `subprocess`.
+- **Web dashboard** (`dashboard.py`): Added a Flask-based live dashboard showing detection events, blocked domains, and system stats.
+- **`run_complete_system.py`**: Added interactive master control menu (choices 1–5) as the single entry point for the whole pipeline.
+
+---
+
 ## 📋 Project Overview
 
 A complete, production-ready system for detecting phishing websites **BEFORE full page load** using only network-level features (DNS, TLS handshake, traffic flow). No payload decryption. No browser access. Pure network intelligence.

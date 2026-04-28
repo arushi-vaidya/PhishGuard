@@ -43,7 +43,7 @@ class RealtimeBlockingSystem:
     
     def __init__(
         self,
-        model_path: str = "models/RandomForest_metadata.json",
+        model_path: str = "models/RandomForest_model.pkl",
         interface: str = "en0",
         timeout: int = 10,
         enable_dns_blocking: bool = True
@@ -80,8 +80,9 @@ class RealtimeBlockingSystem:
             logger.info("[3/5] Loading ML Model for Inference...")
             try:
                 self.inference_engine = RealtimeInferenceEngine(model_path)
-            except:
-                logger.warning("  ⚠ Could not load model, creating demo inference engine")
+                logger.info("  ✓ ML model loaded for live inference")
+            except Exception as e:
+                logger.warning(f"  ⚠ Could not load ML model ({e}), falling back to heuristics")
                 self.inference_engine = None
             
             # 4. Decision engine with blocking policy
@@ -184,14 +185,20 @@ class RealtimeBlockingSystem:
             
             # Process DNS packet through feature engine
             self.feature_engine.process_dns_packet(dns_data)
-            
-            # For real-time blocking, use demo prediction (ML model inference would go here)
-            prediction, confidence, risk_level = self._demo_predict(dns_data)
-            
+
+            ip = dns_data.get('source_ip', '0.0.0.0') if isinstance(dns_data, dict) else getattr(dns_data, 'source_ip', '0.0.0.0')
+
+            # Use ML model if loaded, otherwise fall back to heuristics
+            if self.inference_engine is not None:
+                result = self.inference_engine.predict(domain, ip)
+                prediction, confidence, risk_level = result.prediction, result.confidence, result.risk_level
+            else:
+                prediction, confidence, risk_level = self._demo_predict(dns_data)
+
             # Make decision
             event = self.decision_engine.decide(
                 domain=domain,
-                destination_ip=dns_data.get('source_ip', '0.0.0.0') if isinstance(dns_data, dict) else getattr(dns_data, 'source_ip', '0.0.0.0'),
+                destination_ip=ip,
                 prediction=prediction,
                 confidence=confidence,
                 risk_level=risk_level,
@@ -233,14 +240,20 @@ class RealtimeBlockingSystem:
             
             # Process TLS packet through feature engine
             self.feature_engine.process_tls_packet(tls_data)
-            
-            # For real-time blocking, use demo prediction
-            prediction, confidence, risk_level = self._demo_predict_tls(tls_data)
-            
+
+            ip = tls_data.get('source_ip', '0.0.0.0') if isinstance(tls_data, dict) else getattr(tls_data, 'source_ip', '0.0.0.0')
+
+            # Use ML model if loaded, otherwise fall back to heuristics
+            if self.inference_engine is not None:
+                result = self.inference_engine.predict(domain, ip, sni=domain)
+                prediction, confidence, risk_level = result.prediction, result.confidence, result.risk_level
+            else:
+                prediction, confidence, risk_level = self._demo_predict_tls(tls_data)
+
             # Make decision
             event = self.decision_engine.decide(
                 domain=domain,
-                destination_ip=tls_data.get('source_ip', '0.0.0.0') if isinstance(tls_data, dict) else getattr(tls_data, 'source_ip', '0.0.0.0'),
+                destination_ip=ip,
                 prediction=prediction,
                 confidence=confidence,
                 risk_level=risk_level,
@@ -428,7 +441,7 @@ def main():
     parser.add_argument('--interface', default=None, help='Network interface to sniff (default: system default)')
     parser.add_argument('--timeout', type=int, default=10, help='Capture timeout (seconds)')
     parser.add_argument('--no-blocking', action='store_true', help='Disable DNS blocking')
-    parser.add_argument('--model', default='models/RandomForest_metadata.json', help='Model path')
+    parser.add_argument('--model', default='models/RandomForest_model.pkl', help='Path to model .pkl file')
     
     args = parser.parse_args()
     

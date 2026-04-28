@@ -276,18 +276,31 @@ class DecisionEngine:
             self._send_email_alert(event)
     
     def _handle_block_dns(self, event: DetectionEvent):
-        """Block at DNS level using /etc/hosts modification"""
+        """Block at DNS level — sinkhole first (in-memory), /etc/hosts as persistent fallback."""
         logger.critical(
             f"🛑 BLOCKING (DNS): {event.domain} | "
             f"Confidence: {event.confidence:.2%} | "
             f"IP: {event.destination_ip}"
         )
-        
+
         # Notify user of block
         self._handle_notify(event)
-        
-        # Use real DNS blocking
-        if DNS_BLOCKER_AVAILABLE and block_phishing_domain:
+
+        blocked = False
+
+        # Preferred: in-memory DNS sinkhole (clean, no disk writes, entries expire)
+        try:
+            from .dns_sinkhole import get_sinkhole
+            sinkhole = get_sinkhole()
+            if sinkhole and sinkhole.is_running():
+                sinkhole.block_domain(event.domain, ttl_seconds=86400)
+                logger.info(f"  ✓ Sinkhole block applied: {event.domain} → NXDOMAIN (24h TTL)")
+                blocked = True
+        except Exception as e:
+            logger.debug(f"  Sinkhole unavailable: {e}")
+
+        # Fallback: /etc/hosts modification (requires sudo, persists across reboots)
+        if not blocked and DNS_BLOCKER_AVAILABLE and block_phishing_domain:
             try:
                 result = block_phishing_domain(
                     domain=event.domain,
@@ -295,19 +308,15 @@ class DecisionEngine:
                     use_hosts=True,
                     use_firewall=False
                 )
-                
                 if result.get('hosts'):
-                    logger.info(f"  ✓ REAL DNS BLOCK APPLIED: {event.domain} redirected to 127.0.0.1")
-                    logger.info(f"  → All connections to {event.domain} will now resolve to localhost")
+                    logger.info(f"  ✓ /etc/hosts block applied: {event.domain} → 127.0.0.1")
+                    blocked = True
                 else:
-                    logger.warning(f"  ⚠ DNS block failed (likely permission issue)")
-                    logger.info(f"  → Run with 'sudo' to enable real DNS blocking")
-                    self._simulate_dns_block(event)
+                    logger.warning(f"  ⚠ /etc/hosts block failed — run with sudo for system-wide blocking")
             except Exception as e:
-                logger.error(f"  ✗ Error in DNS blocking: {e}")
-                self._simulate_dns_block(event)
-        else:
-            logger.warning(f"  ⚠ DNS blocker not available, using simulation")
+                logger.error(f"  ✗ /etc/hosts error: {e}")
+
+        if not blocked:
             self._simulate_dns_block(event)
     
     

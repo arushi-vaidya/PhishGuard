@@ -83,30 +83,47 @@ class RealtimeInferenceEngine:
     
     def __init__(self, model_path: str, metadata_path: Optional[str] = None):
         """
-        Initialize inference engine with trained model
-        
-        Args:
-            model_path: Path to trained model pickle file
-            metadata_path: Path to model metadata JSON file
+        Initialize inference engine with trained model.
+
+        model_path can be either the .pkl file or the _metadata.json file —
+        the engine auto-detects which and derives the other path.
         """
-        self.model_path = Path(model_path)
-        self.metadata_path = Path(metadata_path) if metadata_path else None
-        
-        # Load model
+        p = Path(model_path)
+
+        # Accept the metadata JSON as the primary arg (backward-compat)
+        if p.suffix == '.json':
+            self.metadata_path = p
+            # Derive pkl path: RandomForest_metadata.json → RandomForest_model.pkl
+            stem = p.stem.replace('_metadata', '')
+            self.model_path = p.parent / f"{stem}_model.pkl"
+        else:
+            self.model_path = p
+            if metadata_path:
+                self.metadata_path = Path(metadata_path)
+            else:
+                # Derive metadata path: RandomForest_model.pkl → RandomForest_metadata.json
+                stem = p.stem.replace('_model', '')
+                self.metadata_path = p.parent / f"{stem}_metadata.json"
+
+        # Load model and metadata
         self.model = self._load_model()
         self.metadata = self._load_metadata()
         self.feature_names = self.metadata.get('features', [])
-        
+
+        # Load scaler saved during training (same directory as model)
+        self.scaler = self._load_scaler()
+
         # Feature engineering engine
         self.feature_engine = FeatureEngineeringEngine()
-        
+
         # Cache for connections
         self.connection_cache = {}
         self.predictions_log = []
-        
+
         logger.info(f"✓ Inference engine initialized with model: {self.model_path.name}")
         logger.info(f"  Features: {len(self.feature_names)}")
         logger.info(f"  Model type: {self.metadata.get('model_type', 'unknown')}")
+        logger.info(f"  Scaler: {'loaded' if self.scaler else 'not found — features unscaled'}")
     
     def _load_model(self):
         """Load trained model from pickle file"""
@@ -119,6 +136,16 @@ class RealtimeInferenceEngine:
         logger.info(f"✓ Model loaded: {self.model_path}")
         return model
     
+    def _load_scaler(self):
+        """Load StandardScaler saved during training, if present"""
+        scaler_path = self.model_path.parent / "scaler.pkl"
+        if scaler_path.exists():
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+            logger.info(f"✓ Scaler loaded: {scaler_path}")
+            return scaler
+        return None
+
     def _load_metadata(self) -> Dict:
         """Load model metadata"""
         metadata = {
@@ -165,7 +192,11 @@ class RealtimeInferenceEngine:
         # Extract feature values in correct order
         X = features_dict['features']
         num_features = len(X)
-        
+
+        # Apply same scaling used during training
+        if self.scaler is not None:
+            X = self.scaler.transform([X])[0]
+
         # Make prediction with ML model
         prediction_numeric = self.model.predict([X])[0]
         probabilities = self.model.predict_proba([X])[0]

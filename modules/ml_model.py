@@ -21,7 +21,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
@@ -250,23 +250,52 @@ class ModelTrainer:
         
         return self.best_model_name, self.best_model, self.results[self.best_model_name]
     
+    def cross_validate(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        model_name: str = 'RandomForest',
+        k: int = 5
+    ) -> Dict:
+        """Run stratified k-fold cross-validation on a trained model"""
+        model = self.models.get(model_name)
+        if model is None:
+            logger.warning(f"Model {model_name} not found for CV")
+            return {}
+
+        cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+        for metric, scorer in [('accuracy', 'accuracy'), ('f1', 'f1'), ('roc_auc', 'roc_auc')]:
+            scores = cross_val_score(model, X, y, cv=cv, scoring=scorer, n_jobs=-1)
+            logger.info(f"  CV {metric}: {scores.mean():.4f} ± {scores.std():.4f}")
+
+        scores_f1 = cross_val_score(model, X, y, cv=cv, scoring='f1', n_jobs=-1)
+        return {'cv_f1_mean': float(scores_f1.mean()), 'cv_f1_std': float(scores_f1.std())}
+
     def save_model(
         self,
         feature_names: Optional[List[str]] = None,
+        scaler: Optional[StandardScaler] = None,
         output_dir: str = "models"
     ) -> Tuple[str, str]:
-        """Save best model to disk"""
+        """Save best model and scaler to disk"""
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        
+
         if not self.best_model:
             raise ValueError("No model trained yet")
-        
+
         # Save model
         model_file = Path(output_dir) / f"{self.best_model_name}_model.pkl"
         with open(model_file, 'wb') as f:
             pickle.dump(self.best_model, f)
         logger.info(f"✓ Model saved: {model_file}")
-        
+
+        # Save scaler alongside model so inference uses the same scaling
+        if scaler is not None:
+            scaler_file = Path(output_dir) / "scaler.pkl"
+            with open(scaler_file, 'wb') as f:
+                pickle.dump(scaler, f)
+            logger.info(f"✓ Scaler saved: {scaler_file}")
+
         # Save metadata with features
         metadata = {
             'model_name': self.best_model_name,
@@ -281,17 +310,17 @@ class ModelTrainer:
             'model_file': str(model_file),
             'results': self.results[self.best_model_name]
         }
-        
+
         # Convert non-serializable types
         metadata['results']['confusion_matrix'] = metadata['results']['confusion_matrix']
         metadata['results']['y_pred'] = metadata['results']['y_pred']
         metadata['results']['y_pred_proba'] = metadata['results']['y_pred_proba']
-        
+
         metadata_file = Path(output_dir) / f"{self.best_model_name}_metadata.json"
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
         logger.info(f"✓ Metadata saved: {metadata_file}")
-        
+
         return str(model_file), str(metadata_file)
 
 
@@ -343,12 +372,22 @@ class MLPipeline:
         
         # 7. Select best model
         best_name, best_model, best_results = self.trainer.select_best_model()
-        
-        # 8. Save model
+
+        # 8. Cross-validation on the full scaled dataset
+        print(f"\n{'='*80}")
+        print("CROSS-VALIDATION (5-fold stratified)")
+        print("="*80)
+        X_all_scaled = self.preprocessor.scale_features(X, fit=False)
+        cv_results = self.trainer.cross_validate(X_all_scaled, y, model_name=best_name, k=5)
+
+        # 9. Save model + scaler
         print(f"\n{'='*80}")
         print("SAVING MODEL")
         print("="*80)
-        model_file, metadata_file = self.trainer.save_model(feature_names=feature_names)
+        model_file, metadata_file = self.trainer.save_model(
+            feature_names=feature_names,
+            scaler=self.preprocessor.scaler
+        )
         
         print(f"\n{'='*80}")
         print("ML PIPELINE COMPLETE ✓")
@@ -359,14 +398,17 @@ class MLPipeline:
         print(f"  Recall:    {best_results['recall']:.2%}")
         print(f"  F1-Score:  {best_results['f1']:.2%}")
         print(f"  ROC-AUC:   {best_results['roc_auc']:.2%}")
+        if cv_results:
+            print(f"  CV F1:     {cv_results['cv_f1_mean']:.2%} ± {cv_results['cv_f1_std']:.2%}")
         print(f"\nModel saved to: {model_file}")
         print("="*80 + "\n")
-        
+
         return {
             'best_model': best_name,
             'model_file': model_file,
             'metadata_file': metadata_file,
             'results': best_results,
+            'cv_results': cv_results,
             'preprocessor': self.preprocessor
         }
 

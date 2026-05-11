@@ -168,7 +168,16 @@ class RealtimeBlockingSystem:
     def _process_dns_traffic(self, dns_data):
         """Process DNS traffic and make blocking decision"""
         try:
-            domain = dns_data.get('domain', '') if isinstance(dns_data, dict) else getattr(dns_data, 'domain', '')
+            # Extract domain - handle both dict and dataclass formats
+            if isinstance(dns_data, dict):
+                domain = dns_data.get('query_domain', '') or dns_data.get('domain', '')
+                src_ip = dns_data.get('src_ip', '') or dns_data.get('source_ip', '0.0.0.0')
+            else:
+                domain = getattr(dns_data, 'query_domain', '') or getattr(dns_data, 'domain', '')
+                src_ip = getattr(dns_data, 'src_ip', '') or getattr(dns_data, 'source_ip', '0.0.0.0')
+            
+            # Clean the domain first
+            domain = self._clean_sni(domain)
             if not domain:
                 return
             
@@ -185,31 +194,44 @@ class RealtimeBlockingSystem:
             # Process DNS packet through feature engine
             self.feature_engine.process_dns_packet(dns_data)
             
-            # For real-time blocking, use demo prediction (ML model inference would go here)
-            prediction, confidence, risk_level = self._demo_predict(dns_data)
+            # Use actual ML inference engine with hardcoded blocklist
+            if self.inference_engine:
+                result = self.inference_engine.predict(
+                    domain=domain,
+                    destination_ip=src_ip,
+                    sni=domain
+                )
+                prediction = result.prediction
+                confidence = result.confidence
+                risk_level = result.risk_level
+                features_used = result.features_used
+            else:
+                # Fallback to demo prediction if model not loaded
+                prediction, confidence, risk_level = self._demo_predict(dns_data)
+                features_used = 48
             
             # Make decision
             event = self.decision_engine.decide(
                 domain=domain,
-                destination_ip=dns_data.get('source_ip', '0.0.0.0') if isinstance(dns_data, dict) else getattr(dns_data, 'source_ip', '0.0.0.0'),
+                destination_ip=src_ip,
                 prediction=prediction,
                 confidence=confidence,
                 risk_level=risk_level,
-                features_used=48,  # Default feature count
+                features_used=features_used,
                 timestamp=datetime.now().timestamp()
             )
             
             # Track
             if event.blocked:
                 self.blocked_domains.append(domain)
-                logger.critical(f"  🛑 BLOCKED: {domain}")
+                logger.critical(f"  🛑 BLOCKED: {domain} ({confidence:.1%}) - {event.reason}")
             else:
                 if prediction == "phishing":
                     self.detected_phishing.append((domain, confidence))
                     logger.warning(f"  ⚠ ALERT: {domain} ({confidence:.1%})")
                 else:
                     self.safe_domains.append(domain)
-                    logger.info(f"  ✓ SAFE: {domain}")
+                    logger.info(f"  ✓ SAFE: {domain} ({confidence:.1%})")
             
         except Exception as e:
             logger.error(f"  ✗ Error processing DNS: {e}")
@@ -218,6 +240,9 @@ class RealtimeBlockingSystem:
         """Process TLS traffic and make blocking decision"""
         try:
             domain = tls_data.get('sni', '') if isinstance(tls_data, dict) else getattr(tls_data, 'sni', '')
+            
+            # IMPORTANT: Clean the domain first to remove binary garbage
+            domain = self._clean_sni(domain)
             if not domain:
                 return
             
@@ -234,8 +259,21 @@ class RealtimeBlockingSystem:
             # Process TLS packet through feature engine
             self.feature_engine.process_tls_packet(tls_data)
             
-            # For real-time blocking, use demo prediction
-            prediction, confidence, risk_level = self._demo_predict_tls(tls_data)
+            # Use actual ML inference engine with hardcoded blocklist (NOT demo)
+            if self.inference_engine:
+                result = self.inference_engine.predict(
+                    domain=domain,
+                    destination_ip=tls_data.get('source_ip', '0.0.0.0') if isinstance(tls_data, dict) else getattr(tls_data, 'source_ip', '0.0.0.0'),
+                    sni=domain
+                )
+                prediction = result.prediction
+                confidence = result.confidence
+                risk_level = result.risk_level
+                features_used = result.features_used
+            else:
+                # Fallback to demo prediction if model not loaded
+                prediction, confidence, risk_level = self._demo_predict_tls(tls_data)
+                features_used = 48
             
             # Make decision
             event = self.decision_engine.decide(
@@ -244,21 +282,21 @@ class RealtimeBlockingSystem:
                 prediction=prediction,
                 confidence=confidence,
                 risk_level=risk_level,
-                features_used=48,  # Default feature count
+                features_used=features_used,
                 timestamp=datetime.now().timestamp()
             )
             
             # Track
             if event.blocked:
                 self.blocked_domains.append(domain)
-                logger.critical(f"  🛑 BLOCKED: {domain}")
+                logger.critical(f"  🛑 BLOCKED: {domain} ({confidence:.1%}) - {event.reason}")
             else:
                 if prediction == "phishing":
                     self.detected_phishing.append((domain, confidence))
                     logger.warning(f"  ⚠ ALERT: {domain} ({confidence:.1%})")
                 else:
                     self.safe_domains.append(domain)
-                    logger.info(f"  ✓ SAFE: {domain}")
+                    logger.info(f"  ✓ SAFE: {domain} ({confidence:.1%})")
             
         except Exception as e:
             logger.error(f"  ✗ Error processing TLS: {e}")
@@ -360,11 +398,12 @@ class RealtimeBlockingSystem:
         
         # Known phishing patterns - VERY specific
         high_confidence_phishing = [
-            'verify-paypal', 'confirm-paypal', 'update-paypal',
-            'verify-amazon', 'confirm-amazon', 'update-amazon',
-            'verify-apple', 'confirm-apple', 'update-apple',
-            'paypal-verify', 'paypal-confirm', 'amazon-verify', 'amazon-confirm',
-            'apple-verify', 'apple-confirm', 'phishing-site', 'fake-',
+            'verify-paypal', 'confirm-paypal', 'update-paypal', 'paypal-verify', 'paypal-confirm', 'paypal-login',
+            'verify-amazon', 'confirm-amazon', 'update-amazon', 'amazon-verify', 'amazon-confirm', 'amazon-account', 'amazon-login',
+            'verify-apple', 'confirm-apple', 'update-apple', 'apple-verify', 'apple-confirm', 'apple-login',
+            'verify-google', 'confirm-google', 'google-signin', 'google-login',
+            'verify-microsoft', 'confirm-microsoft', 'microsoft-update',
+            'phishing-site', 'fake-',
             'account-verify', 'login-verify', 'secure-verify'
         ]
         

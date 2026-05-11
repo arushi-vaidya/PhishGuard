@@ -34,6 +34,69 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ─── HARDCODED BLOCKLIST & ALLOWLIST ────────────────────────────────────────
+# These are checked FIRST before ML model - instant blocking without ML overhead
+
+HARDCODED_PHISHING_DOMAINS = {
+    # Known phishing patterns
+    'paypal-verify.com',
+    'paypal-login.com',
+    'paypal-confirm.com',
+    'verify-paypal.com',
+    'confirm-paypal.com',
+    
+    # Apple phishing
+    'apple-login.com',
+    'apple-verify.com',
+    'apple-security.com',
+    'icloud-verify.com',
+    'update-apple.com',
+    
+    # Amazon phishing
+    'amazon-account.com',
+    'amazon-verify.com',
+    'confirm-amazon.com',
+    'amazon-login.com',
+    
+    # Google phishing
+    'google-signin.com',
+    'google-login.com',
+    'accounts-google.com',
+    
+    # Microsoft phishing
+    'microsoft-update.com',
+    'microsoft-verify.com',
+    'office365-login.com',
+    'outlook-verify.com',
+    
+    # Banking phishing
+    'bank-verify.com',
+    'secure-banking.com',
+    'confirm-account.com',
+    
+    # Generic patterns
+    'verify-account.com',
+    'confirm-account.com',
+    'update-account.com',
+    'secure-verify.com',
+}
+
+# Domains that are ALWAYS safe (bypass ML)
+HARDCODED_SAFE_DOMAINS = {
+    'google.com',
+    'github.com',
+    'amazon.com',
+    'facebook.com',
+    'youtube.com',
+    'twitter.com',
+    'linkedin.com',
+    'microsoft.com',
+    'apple.com',
+    'stripe.com',
+    'cloudflare.com',
+}
+
+
 class PredictionResult:
     """Result of a single phishing detection prediction"""
     
@@ -107,6 +170,11 @@ class RealtimeInferenceEngine:
         logger.info(f"✓ Inference engine initialized with model: {self.model_path.name}")
         logger.info(f"  Features: {len(self.feature_names)}")
         logger.info(f"  Model type: {self.metadata.get('model_type', 'unknown')}")
+        logger.info(f"  🛑 HARDCODED BLOCKLIST: {len(HARDCODED_PHISHING_DOMAINS)} phishing domains")
+        logger.info(f"     {', '.join(sorted(list(HARDCODED_PHISHING_DOMAINS))[:5])}... (showing first 5)")
+        logger.info(f"  ✅ HARDCODED ALLOWLIST: {len(HARDCODED_SAFE_DOMAINS)} safe domains")
+        logger.info(f"     {', '.join(sorted(HARDCODED_SAFE_DOMAINS))} (all safe domains)")
+
     
     def _load_model(self):
         """Load trained model from pickle file"""
@@ -147,6 +215,20 @@ class RealtimeInferenceEngine:
         Returns:
             PredictionResult with prediction and confidence
         """
+        import time
+        timestamp = time.time()
+        
+        # ─── STEP 1: CHECK HARDCODED BLOCKLIST FIRST (No ML needed!) ─────────
+        blocklist_result = self._check_hardcoded_blocklist(domain, destination_ip, timestamp)
+        if blocklist_result:
+            return blocklist_result
+        
+        # ─── STEP 2: CHECK HARDCODED ALLOWLIST (No ML needed!) ───────────────
+        allowlist_result = self._check_hardcoded_allowlist(domain, destination_ip, timestamp)
+        if allowlist_result:
+            return allowlist_result
+        
+        # ─── STEP 3: Run ML model if not in either list ──────────────────────
         # Build feature vector
         features_dict = self._build_feature_vector(domain, destination_ip, sni)
         
@@ -159,7 +241,7 @@ class RealtimeInferenceEngine:
                 confidence=0.0,
                 risk_level="unknown",
                 features_used=0,
-                timestamp=0
+                timestamp=timestamp
             )
         
         # Extract feature values in correct order
@@ -187,7 +269,7 @@ class RealtimeInferenceEngine:
             confidence=confidence,
             risk_level=risk_level,
             features_used=num_features,
-            timestamp=features_dict.get('timestamp', 0)
+            timestamp=timestamp
         )
         
         # Log prediction
@@ -247,6 +329,88 @@ class RealtimeInferenceEngine:
         except Exception as e:
             logger.error(f"Error building features for {domain}: {e}")
             return None
+    
+    def _check_hardcoded_blocklist(self, domain: str, destination_ip: str, timestamp: float) -> Optional[PredictionResult]:
+        """
+        Check if domain is in hardcoded phishing blocklist
+        Returns instant result without ML model
+        
+        Returns:
+            PredictionResult if found in blocklist, None otherwise
+        """
+        if not domain:
+            return None
+        
+        domain_lower = domain.lower().strip()
+        logger.debug(f"[BLOCKLIST CHECK] Checking domain: '{domain_lower}' against {len(HARDCODED_PHISHING_DOMAINS)} blocked domains")
+        
+        # Check exact match
+        if domain_lower in HARDCODED_PHISHING_DOMAINS:
+            logger.warning(f"🛑 HARDCODED BLOCK: {domain} (EXACT MATCH - instant block, 0 ML features)")
+            return PredictionResult(
+                domain=domain,
+                destination_ip=destination_ip,
+                prediction="phishing",
+                confidence=1.0,  # 100% confidence - hardcoded
+                risk_level="high",
+                features_used=0,  # 0 features - no ML ran
+                timestamp=timestamp
+            )
+        
+        # Check subdomains (*.blocklisted-domain.com matches blocklisted-domain.com)
+        for blocked_domain in HARDCODED_PHISHING_DOMAINS:
+            if domain_lower.endswith('.' + blocked_domain) or domain_lower == blocked_domain:
+                logger.warning(f"🛑 HARDCODED BLOCK: {domain} (PATTERN MATCH '{blocked_domain}' - instant block, 0 ML features)")
+                return PredictionResult(
+                    domain=domain,
+                    destination_ip=destination_ip,
+                    prediction="phishing",
+                    confidence=1.0,
+                    risk_level="high",
+                    features_used=0,
+                    timestamp=timestamp
+                )
+        
+        # Not in blocklist
+        logger.debug(f"[BLOCKLIST CHECK] '{domain_lower}' NOT in blocklist, will run ML model")
+        return None
+    
+    def _check_hardcoded_allowlist(self, domain: str, destination_ip: str, timestamp: float) -> Optional[PredictionResult]:
+        """
+        Check if domain is in hardcoded safe allowlist
+        Returns instant result without ML model
+        
+        Returns:
+            PredictionResult if found in allowlist, None otherwise
+        """
+        # Check exact match
+        if domain.lower() in HARDCODED_SAFE_DOMAINS:
+            logger.info(f"✅ HARDCODED ALLOW: {domain} (instant allow - no ML needed)")
+            return PredictionResult(
+                domain=domain,
+                destination_ip=destination_ip,
+                prediction="legitimate",
+                confidence=1.0,  # 100% confidence - hardcoded
+                risk_level="low",
+                features_used=0,  # 0 features - no ML ran
+                timestamp=timestamp
+            )
+        
+        # Check subdomains (*.safe-domain.com matches safe-domain.com)
+        for safe_domain in HARDCODED_SAFE_DOMAINS:
+            if domain.lower().endswith('.' + safe_domain) or domain.lower() == safe_domain:
+                logger.info(f"✅ HARDCODED ALLOW: {domain} (matches pattern {safe_domain})")
+                return PredictionResult(
+                    domain=domain,
+                    destination_ip=destination_ip,
+                    prediction="legitimate",
+                    confidence=1.0,
+                    risk_level="low",
+                    features_used=0,
+                    timestamp=timestamp
+                )
+        
+        return None
     
     def _get_risk_level(self, prediction: str, confidence: float) -> str:
         """Determine risk level based on prediction and confidence"""

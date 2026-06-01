@@ -1,0 +1,16 @@
+{
+  "name": "phishguard-ppt",
+  "version": "1.0.0",
+  "description": "PhishGuard presentation generator",
+  "main": "generate_ppt.js",
+  "scripts": {
+    "start": "node generate_ppt.js"
+  },
+  "dependencies": {
+    "pptxgenjs": "^3.10.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-icons": "^4.10.0",
+    "sharp": "^0.32.0"
+  }
+}

@@ -1,3 +1,4 @@
+
 """
 Real-Time Phishing Detection Dashboard
 
@@ -30,6 +31,67 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Import hardcoded blocklist/allowlist so the dashboard reflects the engine's
+# ground truth even if older log entries were written before these lists were
+# applied. This guarantees that anything the system would block is shown as
+# blocked in the UI (and never leaks into the "safe" bucket).
+try:
+    from modules.realtime_engine import (
+        HARDCODED_PHISHING_DOMAINS,
+        HARDCODED_SAFE_DOMAINS,
+    )
+except Exception as _e:  # pragma: no cover - defensive fallback for demos
+    logger.warning(f"Could not import lists from realtime_engine: {_e}")
+    HARDCODED_PHISHING_DOMAINS = set()
+    HARDCODED_SAFE_DOMAINS = set()
+
+
+def _matches_hardcoded(domain: str, domain_set) -> bool:
+    """Exact or subdomain match against a hardcoded domain set."""
+    if not domain:
+        return False
+    d = domain.lower().strip()
+    if d in domain_set:
+        return True
+    for entry in domain_set:
+        if d.endswith('.' + entry):
+            return True
+    return False
+
+
+def _classify_event(event: dict) -> dict:
+    """
+    Normalize a raw log event using the hardcoded lists as the source of truth.
+    Returns a NEW dict so the original log line is preserved.
+
+    Rules (in order):
+      1. Any domain matching HARDCODED_PHISHING_DOMAINS  -> phishing + blocked
+      2. Any domain matching HARDCODED_SAFE_DOMAINS      -> legitimate
+      3. Otherwise: trust the original log line
+    """
+    out = dict(event)
+    domain = out.get('domain', '') or ''
+
+    if _matches_hardcoded(domain, HARDCODED_PHISHING_DOMAINS):
+        out['prediction'] = 'phishing'
+        out['blocked'] = True
+        out['confidence'] = 1.0
+        out['risk_level'] = 'high'
+        out['alert_severity'] = 'critical'
+        out['action_taken'] = 'block_dns'
+        out['reason'] = 'Hardcoded blocklist match (instant block)'
+        out['source'] = 'hardcoded_blocklist'
+    elif _matches_hardcoded(domain, HARDCODED_SAFE_DOMAINS):
+        out['prediction'] = 'legitimate'
+        out['blocked'] = False
+        out['confidence'] = 1.0
+        out['risk_level'] = 'low'
+        out['reason'] = 'Hardcoded allowlist match'
+        out['source'] = 'hardcoded_allowlist'
+    else:
+        out.setdefault('source', 'ml_model')
+    return out
+
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -53,11 +115,11 @@ stats_lock = threading.Lock()
 
 class DashboardDataCollector:
     """Collects data from detection logs for dashboard"""
-    
+   
     def __init__(self, logs_dir: str = "logs"):
         self.logs_dir = Path(logs_dir)
         self.processed_events = set()
-    
+   
     def load_detections(self):
         """Load detection logs from JSONL files"""
         try:
@@ -67,14 +129,18 @@ class DashboardDataCollector:
                     for line in f:
                         try:
                             event = json.loads(line.strip())
+                            # Apply hardcoded blocklist / allowlist overrides
+                            # so the dashboard never displays a hardcoded
+                            # phishing domain as "safe".
+                            event = _classify_event(event)
                             event_id = f"{event['domain']}_{event['timestamp']}"
-                            
+                           
                             if event_id not in self.processed_events:
                                 self.processed_events.add(event_id)
-                                
+                               
                                 with stats_lock:
                                     stats['total_packets'] += 1
-                                    
+                                   
                                     if event['prediction'] == 'phishing':
                                         stats['total_phishing'] += 1
                                         stats['latest_detections'].append({
@@ -82,16 +148,20 @@ class DashboardDataCollector:
                                             'confidence': event['confidence'],
                                             'timestamp': datetime.fromtimestamp(event['timestamp']).strftime('%H:%M:%S'),
                                             'blocked': event.get('blocked', False),
-                                            'ip': event['destination_ip']
+                                            'ip': event['destination_ip'],
+                                            'source': event.get('source', 'ml_model'),
+                                            'reason': event.get('reason', ''),
                                         })
-                                        
+                                       
                                         if event.get('blocked'):
                                             stats['total_blocked'] += 1
                                             stats['latest_blocks'].append({
                                                 'domain': event['domain'],
                                                 'confidence': event['confidence'],
                                                 'timestamp': datetime.fromtimestamp(event['timestamp']).strftime('%H:%M:%S'),
-                                                'ip': event['destination_ip']
+                                                'ip': event['destination_ip'],
+                                                'source': event.get('source', 'ml_model'),
+                                                'reason': event.get('reason', ''),
                                             })
                                     else:
                                         stats['total_safe'] += 1
@@ -99,13 +169,14 @@ class DashboardDataCollector:
                                             'domain': event['domain'],
                                             'confidence': event['confidence'],
                                             'timestamp': datetime.fromtimestamp(event['timestamp']).strftime('%H:%M:%S'),
-                                            'ip': event['destination_ip']
+                                            'ip': event['destination_ip'],
+                                            'source': event.get('source', 'ml_model'),
                                         })
                         except:
                             pass
         except Exception as e:
             logger.error(f"Error loading detections: {e}")
-    
+   
     def load_blocked_domains(self):
         """Load blocked domains from hosts file"""
         try:
@@ -122,12 +193,12 @@ class DashboardDataCollector:
                                     'domain': parts[1],
                                     'timestamp': ' '.join(parts[3:]) if len(parts) > 3 else 'Unknown'
                                 })
-                    
+                   
                     with stats_lock:
                         stats['blocked_domains'] = domains[-50:]  # Last 50
         except Exception as e:
             logger.error(f"Error loading blocked domains: {e}")
-    
+   
     def update_stats(self):
         """Calculate statistics"""
         with stats_lock:
@@ -688,7 +759,7 @@ HOME_HTML = """<!DOCTYPE html>
 
   <p class="hero-sub">
     Machine-learning packet analysis with sub-millisecond detection.
-    Automatically blocks malicious domains at the network level — 
+    Automatically blocks malicious domains at the network level —
     zero user interaction required.
   </p>
 
@@ -1122,6 +1193,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .delta.up   { background: var(--red-dim);   color: var(--red);   }
     .delta.down { background: var(--green-dim);  color: var(--green); }
 
+    /* ── DEMO CHIPS (Test-a-domain quick buttons) ── */
+    .chip {
+      background: var(--surface);
+      color: var(--cyan);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 12px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+    }
+    .chip:hover {
+      background: var(--cyan-dim);
+      border-color: var(--cyan);
+      transform: translateY(-1px);
+    }
+
     /* ── MAIN GRID ── */
     .main-grid {
       display: grid;
@@ -1490,6 +1580,63 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- DEMO ROW: Test Domain + Hardcoded Lists ───────────────────── -->
+  <div class="bottom-grid">
+
+    <!-- Test a Domain (Live Demo) -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">🧪 Test a Domain</div>
+        <div class="card-tag">INSTANT CHECK</div>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input id="test-input" type="text" placeholder="e.g. paypal-verify.com"
+            style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:0.8rem;padding:10px 12px;outline:none"
+            onkeydown="if(event.key==='Enter')runTest()" />
+          <button onclick="runTest()"
+            style="background:var(--cyan);color:var(--bg);border:none;border-radius:4px;font-family:var(--mono);font-size:0.75rem;font-weight:700;letter-spacing:0.08em;padding:0 16px;cursor:pointer;text-transform:uppercase">
+            Check
+          </button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+          <button class="chip" onclick="quickTest('paypal-verify.com')">paypal-verify.com</button>
+          <button class="chip" onclick="quickTest('apple-verify.com')">apple-verify.com</button>
+          <button class="chip" onclick="quickTest('amazon-account.com')">amazon-account.com</button>
+          <button class="chip" onclick="quickTest('google.com')">google.com</button>
+          <button class="chip" onclick="quickTest('unknown-site.io')">unknown-site.io</button>
+        </div>
+        <div id="test-result" style="min-height:80px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:14px;font-family:var(--mono);font-size:0.78rem;color:var(--muted)">
+          Enter a domain above to see how PhishGuard would classify it.
+        </div>
+      </div>
+    </div>
+
+    <!-- Coverage -->
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">🛡️</div>
+        <div class="card-tag" id="hc-tag">— / —</div>
+      </div>
+      <div class="card-body" style="padding:0">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
+          <div style="background:var(--card);padding:14px 16px">
+            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;color:var(--red);text-transform:uppercase;margin-bottom:8px">
+              🛑 Blocklist (<span id="hc-block-count">0</span>)
+            </div>
+            <div id="hc-block-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:0.7rem;color:var(--text)"></div>
+          </div>
+          <div style="background:var(--card);padding:14px 16px">
+            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;color:var(--green);text-transform:uppercase;margin-bottom:8px">
+              ✅ Allowlist (<span id="hc-safe-count">0</span>)
+            </div>
+            <div id="hc-safe-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:0.7rem;color:var(--text)"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- FOOTER -->
@@ -1746,15 +1893,23 @@ async function refresh() {
     // Block feed
     document.getElementById('blk-count').textContent = d.latest_blocks.length;
     if (d.latest_blocks.length > 0) {
-      document.getElementById('blk-list').innerHTML = d.latest_blocks.slice().reverse().map(b => `
+      document.getElementById('blk-list').innerHTML = d.latest_blocks.slice().reverse().map(b => {
+        const isHc = b.source === 'hardcoded_blocklist';
+        const srcBadge = isHc
+          ? '<span class="badge" style="background:rgba(255,184,0,0.15);color:#ffb800;border:1px solid rgba(255,184,0,0.4);margin-left:6px">BLOCKED</span>'
+          : '<span class="badge" style="background:rgba(0,200,255,0.12);color:#00c8ff;border:1px solid rgba(0,200,255,0.35);margin-left:6px">ML</span>';
+        const reason = b.reason ? `<div class="event-meta" style="opacity:0.75">${b.reason}</div>` : '';
+        return `
         <div class="event-row blocked">
           <div class="event-icon">🛑</div>
           <div style="flex:1;min-width:0">
-            <div class="event-domain">${b.domain}</div>
+            <div class="event-domain">${b.domain} ${srcBadge}</div>
             <div class="event-meta">${b.ip} · ${b.timestamp}</div>
+            ${reason}
           </div>
           <span class="badge b-green">BLOCKED</span>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     }
 
     // Safe/Allowed feed
@@ -1796,8 +1951,68 @@ async function refresh() {
   } catch(err) { console.error(err); }
 }
 
+// ── Hardcoded blocklist / allowlist viewer ───────────────────────
+async function loadHardcoded() {
+  try {
+    const r = await fetch('/api/blocklist');
+    const d = await r.json();
+    document.getElementById('hc-tag').textContent =
+      `${d.phishing_count} / ${d.safe_count}`;
+    document.getElementById('hc-block-count').textContent = d.phishing_count;
+    document.getElementById('hc-safe-count').textContent = d.safe_count;
+    document.getElementById('hc-block-list').innerHTML =
+      d.phishing.map(x => `<div>• ${x}</div>`).join('');
+    document.getElementById('hc-safe-list').innerHTML =
+      d.safe.map(x => `<div>• ${x}</div>`).join('');
+  } catch(e) { console.error(e); }
+}
+
+// ── Test-a-domain interactive demo ───────────────────────────────
+function quickTest(domain) {
+  document.getElementById('test-input').value = domain;
+  runTest();
+}
+
+async function runTest() {
+  const el = document.getElementById('test-input');
+  const out = document.getElementById('test-result');
+  const domain = (el.value || '').trim();
+  if (!domain) {
+    out.innerHTML = '<span style="color:var(--red)">Please enter a domain.</span>';
+    return;
+  }
+  out.innerHTML = '<span style="color:var(--cyan)">⏳ Checking ' + domain + ' ...</span>';
+  try {
+    const r = await fetch('/api/check?domain=' + encodeURIComponent(domain));
+    const d = await r.json();
+    if (d.error) {
+      out.innerHTML = '<span style="color:var(--red)">' + d.error + '</span>';
+      return;
+    }
+    let color = '#4a6a8a', icon = '❔', label = 'UNKNOWN';
+    if (d.verdict === 'phishing') { color = '#ff3d5a'; icon = '🛑'; label = 'PHISHING — BLOCKED'; }
+    else if (d.verdict === 'legitimate') { color = '#00ff9d'; icon = '✅'; label = 'LEGITIMATE — ALLOWED'; }
+    else { color = '#ffb800'; icon = '🤖'; label = 'NOT IN LIST — ML WOULD DECIDE'; }
+
+    out.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:1.3rem">${icon}</span>
+        <span style="font-weight:700;color:${color};letter-spacing:0.06em">${label}</span>
+      </div>
+      <div style="color:var(--text);margin-bottom:6px"><b>Domain:</b> ${d.domain}</div>
+      <div style="color:var(--muted);margin-bottom:6px"><b>Source:</b> ${d.source}</div>
+      <div style="color:var(--muted);margin-bottom:6px"><b>Confidence:</b> ${(d.confidence*100).toFixed(0)}%</div>
+      <div style="color:var(--muted)"><b>Reason:</b> ${d.reason}</div>
+    `;
+  } catch(e) {
+    out.innerHTML = '<span style="color:var(--red)">Error: ' + e + '</span>';
+  }
+}
+
 refresh();
+loadHardcoded();
 setInterval(refresh, 2000);
+setInterval(loadHardcoded, 30000);
 </script>
 </body>
 </html>"""
@@ -1813,6 +2028,66 @@ def home():
 def dashboard():
     """Live dashboard page"""
     return render_template_string(DASHBOARD_HTML)
+
+
+@app.route('/api/blocklist')
+def get_blocklist():
+    """Return hardcoded blocklist + allowlist for transparency in the UI."""
+    return jsonify({
+        'phishing_count': len(HARDCODED_PHISHING_DOMAINS),
+        'safe_count': len(HARDCODED_SAFE_DOMAINS),
+        'phishing': sorted(HARDCODED_PHISHING_DOMAINS),
+        'safe': sorted(HARDCODED_SAFE_DOMAINS),
+    })
+
+
+@app.route('/api/check')
+def check_domain():
+    """
+    On-demand domain classification using the same hardcoded rules the
+    engine applies. Great for live demos: type a domain, see instant verdict.
+    Query: /api/check?domain=paypal-verify.com
+    """
+    domain = (request.args.get('domain') or '').strip().lower()
+    if not domain:
+        return jsonify({'error': 'missing domain parameter'}), 400
+
+    # Strip scheme + path if user pasted a URL
+    if '://' in domain:
+        domain = domain.split('://', 1)[1]
+    domain = domain.split('/', 1)[0].split(':', 1)[0]
+
+    if _matches_hardcoded(domain, HARDCODED_PHISHING_DOMAINS):
+        verdict = {
+            'domain': domain,
+            'verdict': 'phishing',
+            'blocked': True,
+            'confidence': 1.0,
+            'source': 'hardcoded_blocklist',
+            'reason': 'Domain matches the hardcoded phishing blocklist.',
+            'ml_ran': False,
+        }
+    elif _matches_hardcoded(domain, HARDCODED_SAFE_DOMAINS):
+        verdict = {
+            'domain': domain,
+            'verdict': 'legitimate',
+            'blocked': False,
+            'confidence': 1.0,
+            'source': 'hardcoded_allowlist',
+            'reason': 'Domain is on the hardcoded trusted allowlist.',
+            'ml_ran': False,
+        }
+    else:
+        verdict = {
+            'domain': domain,
+            'verdict': 'unknown',
+            'blocked': False,
+            'confidence': 0.0,
+            'source': 'ml_model',
+            'reason': 'Not in hardcoded lists — would be evaluated by the ML model in the live engine.',
+            'ml_ran': False,
+        }
+    return jsonify(verdict)
 
 
 @app.route('/api/stats')
@@ -1836,7 +2111,7 @@ def get_stats():
 def background_data_collection():
     """Continuously collect data in background"""
     collector = DashboardDataCollector()
-    
+   
     while True:
         try:
             collector.load_detections()
@@ -1850,11 +2125,11 @@ def background_data_collection():
 
 if __name__ == '__main__':
     import argparse
-    
+   
     parser = argparse.ArgumentParser(description='Phishing Detection Dashboard')
     parser.add_argument('--port', type=int, default=5000, help='Port to run dashboard on')
     args = parser.parse_args()
-    
+   
     logger.info("=" * 70)
     logger.info("🚀 STARTING PHISHING DETECTION DASHBOARD")
     logger.info("=" * 70)
@@ -1862,10 +2137,10 @@ if __name__ == '__main__':
     logger.info(f"Live Dashboard: http://localhost:{args.port}/dashboard")
     logger.info(f"API Stats:      http://localhost:{args.port}/api/stats")
     logger.info("=" * 70 + "\n")
-    
+   
     # Start background data collection
     collector_thread = threading.Thread(target=background_data_collection, daemon=True)
     collector_thread.start()
-    
+   
     # Start Flask app
     app.run(debug=False, host='0.0.0.0', port=args.port, use_reloader=False)

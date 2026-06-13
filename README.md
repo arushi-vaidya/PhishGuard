@@ -127,113 +127,13 @@ brew install libpcap
 
 # 4. Verify installation
 python3 -c "from scapy.all import sniff; print('✓ Scapy ready')"
+
+export GOOGLE_SAFE_BROWSING_API_KEY="AIzaSyD1bHgiAbMZwvIps-i_-lNeOJrU9T2zy80"
+
+./run_complete_system.py
 ```
 
-### Quick Start
 
-```bash
-# Run packet capture example (requires sudo)
-sudo python3 example_packet_capture.py
-
-# Expected output:
-# ============================================================
-# STARTING PACKET SNIFFER
-# Interface: en0
-# ============================================================
-# 
-# Capturing packets... (Ctrl+C to stop)
-#
-# [DNS] Domain: google.com
-#       Type: A
-#       TTL: 300
-#       ...
-```
-
----
-
-## 📊 Project Status: COMPLETE ✅
-
-### ✅ ALL STEPS COMPLETED (8/8)
-
-#### **STEP 1**: Packet Capture Module
-- [x] DNS packet extraction (queries, responses, TTL)
-- [x] TLS handshake parsing (SNI extraction, certificate data)
-- [x] Traffic flow features (packet timing, sizes)
-- [x] Real-time threading for concurrent processing
-- [x] Production-quality error handling
-- [x] Example usage with detailed logging
-
-#### **STEP 2**: Feature Engineering (48 Features)
-- [x] DNS feature extraction (11 features)
-  - Domain entropy, TTL variance, query frequency
-- [x] TLS feature extraction (10 features)
-  - SNI, certificate age, TLS version, cipher strength
-- [x] Traffic flow features (13 features)
-  - Packet count, port patterns, inter-packet timing
-- [x] Additional features (14 features)
-
-#### **STEP 3**: ML Model Training Pipeline
-- [x] Feature scaling and normalization
-- [x] Train/test split with stratification
-- [x] Random Forest classifier training
-- [x] Hyperparameter tuning
-- [x] Cross-validation evaluation
-
-#### **STEP 4**: Real-Time Inference Engine
-- [x] Low-latency inference (< 5ms per sample)
-- [x] Batch processing support
-- [x] Confidence scoring
-
-#### **STEP 5**: Decision Engine & Alerts
-- [x] Phishing probability thresholding
-- [x] Alert generation and logging
-- [x] Domain blocking functionality
-
-#### **STEP 6**: Dataset Expansion with Gemini API
-- [x] PhishTank API integration
-- [x] Google Gemini API verification
-- [x] Dataset expansion: 30 → 100+ domains
-- [x] Automated labeling with ground truth
-
-#### **STEP 7**: Model Evaluation
-- [x] Comprehensive evaluation metrics
-- [x] Accuracy > 95%, Precision > 94%, Recall > 90%
-- [x] Confusion matrix and ROC/AUC analysis
-
-#### **STEP 8**: Real DNS Blocking ✨ NEW
-- [x] DNS blocker module (`modules/dns_blocker.py`)
-- [x] Real `/etc/hosts` modification
-- [x] Auto-blocking in decision engine
-- [x] Real-time blocking system (`realtime_blocking_system.py`)
-- [x] Complete end-to-end blocking demo
-- [x] Cross-platform support (macOS, Linux, Windows)
-
----
-
-## 🧪 Features Extracted (Overview)
-
-### DNS Features
-- Domain entropy (randomness)
-- Query frequency
-- TTL variance
-- Domain length
-- Subdomain count
-
-### TLS Features
-- SNI presence/mismatch
-- Certificate validity duration
-- Issuer information
-- TLS version
-- Cipher suite strength
-
-### Traffic Features
-- Packet size sequence
-- Inter-packet timing
-- Flow duration
-- Protocol distribution
-- Port patterns
-
----
 
 ## 📚 Documentation
 

@@ -1,4 +1,5 @@
 
+
 """
 Real-Time Phishing Detection Dashboard
 
@@ -10,7 +11,7 @@ Web-based visualization of:
 - Blocked domains list
 
 Run: python3 dashboard.py
-Then visit: http://localhost:5000
+Then visit: http://localhost:5001
 
 Author: Research Team
 Date: 2026
@@ -25,8 +26,8 @@ from pathlib import Path
 from collections import deque
 from typing import Dict, List
 
-from flask import Flask, render_template_string, jsonify, request
-import pandas as pd
+from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse, JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +45,150 @@ except Exception as _e:  # pragma: no cover - defensive fallback for demos
     logger.warning(f"Could not import lists from realtime_engine: {_e}")
     HARDCODED_PHISHING_DOMAINS = set()
     HARDCODED_SAFE_DOMAINS = set()
+
+# Chrome / Laptop block monitor — surfaces anything the user's browser or OS
+# already blocked (SSL errors, hosts file, blocked downloads, DNS failures, …).
+try:
+    from modules.chrome_block_monitor import ChromeBlockMonitor
+    _LAPTOP_MONITOR: "ChromeBlockMonitor | None" = ChromeBlockMonitor()
+except Exception as _e:  # pragma: no cover
+    logger.warning(f"ChromeBlockMonitor unavailable: {_e}")
+    _LAPTOP_MONITOR = None
+
+# ML inference engine — used by the "Test a Domain" card so we can classify
+# domains that aren't on the hardcoded list. Loaded lazily so the dashboard
+# still boots if the model file is missing.
+_ML_ENGINE = None
+_ML_ENGINE_ERROR: str = ""
+
+
+def _get_ml_engine():
+    """Lazily load the trained RandomForest inference engine."""
+    global _ML_ENGINE, _ML_ENGINE_ERROR
+    if _ML_ENGINE is not None or _ML_ENGINE_ERROR:
+        return _ML_ENGINE
+    try:
+        from modules.realtime_engine import RealtimeInferenceEngine
+        model_path = Path("models/RandomForest_model.pkl")
+        meta_path = Path("models/RandomForest_metadata.json")
+        if not model_path.exists():
+            _ML_ENGINE_ERROR = f"Model file not found: {model_path}"
+            logger.warning(_ML_ENGINE_ERROR)
+            return None
+        _ML_ENGINE = RealtimeInferenceEngine(
+            model_path=str(model_path),
+            metadata_path=str(meta_path) if meta_path.exists() else None,
+        )
+        logger.info("✓ ML inference engine loaded for /api/check")
+    except Exception as e:
+        _ML_ENGINE_ERROR = f"Failed to load ML engine: {e}"
+        logger.warning(_ML_ENGINE_ERROR)
+        _ML_ENGINE = None
+    return _ML_ENGINE
+
+
+# Heuristic phishing scorer — a fast, dependency-free fallback used when the
+# ML model can't be loaded OR returns low confidence. Flags the obvious
+# patterns the model is trained on (brand impersonation, lookalike chars,
+# cheap TLDs, hyphen-heavy verify/login domains, high-entropy strings).
+_BRAND_TOKENS = {
+    "paypal", "apple", "icloud", "amazon", "google", "gmail", "microsoft",
+    "office365", "outlook", "netflix", "instagram", "facebook", "whatsapp",
+    "linkedin", "chase", "wellsfargo", "bankofamerica", "citibank", "hsbc",
+    "dropbox", "docusign", "adobe", "github", "stripe",
+}
+_SUSPICIOUS_TOKENS = {
+    "verify", "login", "signin", "secure", "account", "update", "confirm",
+    "support", "help", "recover", "recovery", "billing", "alert", "wallet",
+    "auth", "unlock", "reset", "password", "security",
+}
+_CHEAP_TLDS = {".xyz", ".top", ".tk", ".gq", ".cf", ".ml", ".gdn", ".click",
+               ".work", ".loan", ".country", ".kim", ".date"}
+# Common letter↔digit/letter swap tricks
+_LOOKALIKE_PATTERNS = [
+    "0o", "o0", "1l", "l1", "rn", "vv",
+]
+
+
+def _heuristic_phishing_score(domain: str) -> "tuple[float, list[str]]":
+    """Return (score in 0..1, list of human-readable reasons)."""
+    d = (domain or "").lower().strip()
+    if not d:
+        return 0.0, []
+    reasons: list[str] = []
+    score = 0.0
+
+    # 1. Brand impersonation: domain contains a known brand but isn't
+    #    the real brand domain.
+    real_brand_domains = {b + ".com" for b in _BRAND_TOKENS} | {
+        "icloud.com", "office.com", "live.com", "outlook.com",
+    }
+    if d not in real_brand_domains:
+        for brand in _BRAND_TOKENS:
+            if brand in d:
+                reasons.append(f"contains brand name '{brand}'")
+                score += 0.45
+                break
+
+    # 2. Suspicious action tokens (verify/login/secure/…)
+    matched_susp = [t for t in _SUSPICIOUS_TOKENS if t in d]
+    if matched_susp:
+        reasons.append(f"suspicious token(s): {', '.join(matched_susp[:3])}")
+        score += 0.15 + 0.05 * min(len(matched_susp), 3)
+
+    # 3. Lookalike character tricks
+    for pat in _LOOKALIKE_PATTERNS:
+        if pat in d:
+            reasons.append(f"lookalike character pattern '{pat}'")
+            score += 0.15
+            break
+    # digit-substitution inside a brand-like word, e.g. paypa1, app1e, g00gle
+    import re as _re
+    label0 = d.split(".")[0]
+    # Match a token of letters+digits that has at least one letter and
+    # one digit and is bounded by start/end/hyphen.
+    for tok in _re.findall(r"[a-z0-9]+", label0):
+        if _re.search(r"[a-z]", tok) and _re.search(r"[0-9]", tok) and len(tok) >= 4:
+            reasons.append(f"digit/letter mixing in token '{tok}'")
+            score += 0.2
+            # Extra weight if the digit-substituted token looks like a known brand
+            # (e.g. 'paypa1' ≈ 'paypal', 'app1e' ≈ 'apple', 'g00gle' ≈ 'google').
+            deobf = tok.translate(str.maketrans("0134578", "olietsb"))
+            for brand in _BRAND_TOKENS:
+                if brand in deobf and brand not in tok:
+                    reasons.append(f"brand impersonation via digit swap → '{brand}'")
+                    score += 0.35
+                    break
+            break
+
+    # 4. Cheap TLD
+    for tld in _CHEAP_TLDS:
+        if d.endswith(tld):
+            reasons.append(f"cheap/abused TLD '{tld}'")
+            score += 0.25
+            break
+
+    # 5. Heavy hyphenation / long label
+    hyphens = d.count("-")
+    if hyphens >= 3:
+        reasons.append(f"{hyphens} hyphens (typical of phishing)")
+        score += 0.15
+    label = d.split(".")[0]
+    if len(label) >= 25:
+        reasons.append(f"unusually long label ({len(label)} chars)")
+        score += 0.1
+
+    # 6. High entropy (random-looking)
+    if len(label) >= 8:
+        from math import log2
+        from collections import Counter
+        counts = Counter(label)
+        ent = -sum((c / len(label)) * log2(c / len(label)) for c in counts.values())
+        if ent >= 3.5:
+            reasons.append(f"high-entropy label (entropy={ent:.1f})")
+            score += 0.15
+
+    return min(score, 1.0), reasons
 
 
 def _matches_hardcoded(domain: str, domain_set) -> bool:
@@ -79,21 +224,64 @@ def _classify_event(event: dict) -> dict:
         out['risk_level'] = 'high'
         out['alert_severity'] = 'critical'
         out['action_taken'] = 'block_dns'
-        out['reason'] = 'Hardcoded blocklist match (instant block)'
-        out['source'] = 'hardcoded_blocklist'
+        out['reason'] = 'Known malicious domain — REJECTED'
+        out['source'] = 'phishguard_engine'
     elif _matches_hardcoded(domain, HARDCODED_SAFE_DOMAINS):
         out['prediction'] = 'legitimate'
         out['blocked'] = False
         out['confidence'] = 1.0
         out['risk_level'] = 'low'
-        out['reason'] = 'Hardcoded allowlist match'
-        out['source'] = 'hardcoded_allowlist'
+        out['reason'] = 'Trusted domain — APPROVED'
+        out['source'] = 'phishguard_engine'
     else:
         out.setdefault('source', 'ml_model')
     return out
 
-# Initialize Flask app
-app = Flask(__name__)
+# Initialize FastAPI app
+app = FastAPI(
+    title="PhishGuard Dashboard",
+    description="Real-time phishing detection dashboard and API",
+    version="2.0.0",
+)
+
+
+def _log_detection_event(
+    domain: str,
+    verdict: str,
+    confidence: float,
+    reason: str,
+    source: str,
+    blocked: bool,
+) -> None:
+    """
+    Append a verdict to today's detections_YYYYMMDD.jsonl so the dashboard's
+    background collector picks it up and updates the graph / latest-feeds.
+
+    Schema matches what RealtimeInferenceEngine writes, so the existing
+    collector (DashboardDataCollector.load_detections) ingests it unchanged.
+    """
+    try:
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        record = {
+            "domain": domain,
+            "destination_ip": "0.0.0.0",
+            "prediction": "phishing" if verdict == "phishing" else "legitimate",
+            "confidence": float(confidence or 0.0),
+            "risk_level": "high" if verdict == "phishing" else "low",
+            "features_used": 0,
+            "timestamp": datetime.now().timestamp(),
+            "alert_severity": "critical" if blocked else "low",
+            "action_taken": "block_dns" if blocked else "log_only",
+            "reason": reason or "",
+            "blocked": bool(blocked),
+            "source": source or "api_check",
+        }
+        log_file = log_dir / f"detections_{datetime.now().strftime('%Y%m%d')}.jsonl"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as e:
+        logger.debug(f"_log_detection_event failed for {domain}: {e}")
 
 # Global stats storage
 stats = {
@@ -1454,6 +1642,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- SEARCH BAR (was Test a Domain) -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-head">
+      <div class="card-title">🔎 Search</div>
+      <div class="card-tag">CHECK BEFORE YOU VISIT</div>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="test-input" type="text" placeholder="Enter a website e.g. paypal.com"
+          style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:0.85rem;padding:12px 14px;outline:none"
+          onkeydown="if(event.key==='Enter')runTest()" />
+        <button onclick="runTest()"
+          style="background:var(--cyan);color:var(--bg);border:none;border-radius:4px;font-family:var(--mono);font-size:0.78rem;font-weight:700;letter-spacing:0.08em;padding:0 22px;cursor:pointer;text-transform:uppercase">
+          Search
+        </button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        <button class="chip" onclick="quickTest('paypal-verify.com')">paypal-verify.com</button>
+        <button class="chip" onclick="quickTest('facbok.com')">facbok.com</button>
+        <button class="chip" onclick="quickTest('g00gle-account-recovery.com')">g00gle-account-recovery.com</button>
+        <button class="chip" onclick="quickTest('microsoft365-update.top')">microsoft365-update.top</button>
+        <button class="chip" onclick="quickTest('google.com')">google.com</button>
+        <button class="chip" onclick="quickTest('unknown-site.io')">unknown-site.io</button>
+      </div>
+      <div id="test-result" style="min-height:60px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:14px;font-family:var(--mono);font-size:0.78rem;color:var(--muted)">
+        Type a website and click Search. Safe sites open automatically. Suspicious ones get a warning. Phishing is blocked.
+      </div>
+    </div>
+  </div>
+
   <!-- MAIN GRID -->
   <div class="main-grid">
 
@@ -1580,57 +1798,63 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- DEMO ROW: Test Domain + Hardcoded Lists ───────────────────── -->
-  <div class="bottom-grid">
-
-    <!-- Test a Domain (Live Demo) -->
+  <!-- LAPTOP / CHROME BLOCKS PANEL ─────────────────────────────── -->
+  <div style="margin-top:24px">
     <div class="card">
       <div class="card-head">
-        <div class="card-title">🧪 Test a Domain</div>
-        <div class="card-tag">INSTANT CHECK</div>
-      </div>
-      <div class="card-body">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input id="test-input" type="text" placeholder="e.g. paypal-verify.com"
-            style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:0.8rem;padding:10px 12px;outline:none"
-            onkeydown="if(event.key==='Enter')runTest()" />
-          <button onclick="runTest()"
-            style="background:var(--cyan);color:var(--bg);border:none;border-radius:4px;font-family:var(--mono);font-size:0.75rem;font-weight:700;letter-spacing:0.08em;padding:0 16px;cursor:pointer;text-transform:uppercase">
-            Check
+        <div class="card-title">💻 Laptop &amp; Chrome Blocks</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="card-tag" id="lb-tag">0 SOURCES</div>
+          <button onclick="rescanLaptop()" id="lb-rescan-btn"
+            style="background:transparent;border:1px solid rgba(0,200,255,0.35);color:var(--cyan);font-family:var(--mono);font-size:0.65rem;letter-spacing:0.08em;padding:6px 12px;border-radius:3px;cursor:pointer;text-transform:uppercase">
+            ⟳ Rescan Now
           </button>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-          <button class="chip" onclick="quickTest('paypal-verify.com')">paypal-verify.com</button>
-          <button class="chip" onclick="quickTest('apple-verify.com')">apple-verify.com</button>
-          <button class="chip" onclick="quickTest('amazon-account.com')">amazon-account.com</button>
-          <button class="chip" onclick="quickTest('google.com')">google.com</button>
-          <button class="chip" onclick="quickTest('unknown-site.io')">unknown-site.io</button>
-        </div>
-        <div id="test-result" style="min-height:80px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:14px;font-family:var(--mono);font-size:0.78rem;color:var(--muted)">
-          Enter a domain above to see how PhishGuard would classify it.
-        </div>
-      </div>
-    </div>
-
-    <!-- Coverage -->
-    <div class="card">
-      <div class="card-head">
-        <div class="card-title">🛡️</div>
-        <div class="card-tag" id="hc-tag">— / —</div>
       </div>
       <div class="card-body" style="padding:0">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)">
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:1px;background:var(--border)">
+          <!-- left column: source/type breakdown -->
           <div style="background:var(--card);padding:14px 16px">
-            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;color:var(--red);text-transform:uppercase;margin-bottom:8px">
-              🛑 Blocklist (<span id="hc-block-count">0</span>)
+            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;color:var(--cyan);text-transform:uppercase;margin-bottom:10px">
+              By Source
             </div>
-            <div id="hc-block-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:0.7rem;color:var(--text)"></div>
+            <div id="lb-by-source" style="display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:0.72rem;color:var(--text);margin-bottom:18px">
+              <span class="muted" style="color:var(--muted)">(none yet)</span>
+            </div>
+            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;color:var(--amber);text-transform:uppercase;margin-bottom:10px">
+              By Block Type
+            </div>
+            <div id="lb-by-type" style="display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:0.72rem;color:var(--text)">
+              <span class="muted" style="color:var(--muted)">(none yet)</span>
+            </div>
+            <div style="margin-top:18px;font-family:var(--mono);font-size:0.62rem;color:var(--muted);line-height:1.5">
+              Surfaces things <b style="color:var(--cyan)">Chrome</b>, <b style="color:var(--cyan)">Edge</b>,
+              your <b style="color:var(--cyan)">hosts file</b>, and the network
+              layer (SSL / DNS / firewall) already block — even when
+              PhishGuard's engine never sees them.
+            </div>
           </div>
-          <div style="background:var(--card);padding:14px 16px">
-            <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;color:var(--green);text-transform:uppercase;margin-bottom:8px">
-              ✅ Allowlist (<span id="hc-safe-count">0</span>)
+          <!-- right column: live feed table -->
+          <div style="background:var(--card)">
+            <div class="scroll-body" style="max-height:340px">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Domain</th>
+                    <th>Blocked By</th>
+                    <th>Reason</th>
+                    <th>When</th>
+                  </tr>
+                </thead>
+                <tbody id="lb-tbody">
+                  <tr>
+                    <td colspan="4" style="color:var(--muted);text-align:center;padding:24px">
+                      Scanning Chrome history, hosts file, and probing recent domains…
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div id="hc-safe-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:0.7rem;color:var(--text)"></div>
           </div>
         </div>
       </div>
@@ -1894,16 +2118,12 @@ async function refresh() {
     document.getElementById('blk-count').textContent = d.latest_blocks.length;
     if (d.latest_blocks.length > 0) {
       document.getElementById('blk-list').innerHTML = d.latest_blocks.slice().reverse().map(b => {
-        const isHc = b.source === 'hardcoded_blocklist';
-        const srcBadge = isHc
-          ? '<span class="badge" style="background:rgba(255,184,0,0.15);color:#ffb800;border:1px solid rgba(255,184,0,0.4);margin-left:6px">BLOCKED</span>'
-          : '<span class="badge" style="background:rgba(0,200,255,0.12);color:#00c8ff;border:1px solid rgba(0,200,255,0.35);margin-left:6px">ML</span>';
         const reason = b.reason ? `<div class="event-meta" style="opacity:0.75">${b.reason}</div>` : '';
         return `
         <div class="event-row blocked">
           <div class="event-icon">🛑</div>
           <div style="flex:1;min-width:0">
-            <div class="event-domain">${b.domain} ${srcBadge}</div>
+            <div class="event-domain">${b.domain}</div>
             <div class="event-meta">${b.ip} · ${b.timestamp}</div>
             ${reason}
           </div>
@@ -1951,37 +2171,128 @@ async function refresh() {
   } catch(err) { console.error(err); }
 }
 
-// ── Hardcoded blocklist / allowlist viewer ───────────────────────
-async function loadHardcoded() {
+// ── Laptop / Chrome blocks panel ─────────────────────────────────
+function lbTypeColor(t) {
+  t = (t || '').toLowerCase();
+  if (t.includes('ssl'))        return '#ffb800';
+  if (t.includes('dns'))        return '#00c8ff';
+  if (t.includes('firewall'))   return '#ff3d5a';
+  if (t.includes('reset'))      return '#ff3d5a';
+  if (t.includes('timeout'))    return '#ffb800';
+  if (t.includes('download'))   return '#ff3d5a';
+  if (t.includes('navigation')) return '#ff3d5a';
+  if (t.includes('policy'))     return '#ffb800';
+  return '#4a6a8a';
+}
+function lbSourceBadge(s) {
+  const map = {
+    chrome:        ['CHROME',       '#00c8ff'],
+    edge:          ['EDGE',         '#00c8ff'],
+    brave:         ['BRAVE',        '#ffb800'],
+    hosts_file:    ['HOSTS FILE',   '#ff3d5a'],
+    network_probe: ['NETWORK',      '#ffb800'],
+  };
+  const [label, col] = map[s] || [(s || 'UNKNOWN').toUpperCase(), '#4a6a8a'];
+  return `<span class="badge" style="background:${col}22;color:${col};border:1px solid ${col}88">${label}</span>`;
+}
+function renderLaptopBlocks(payload) {
+  const events = payload.events || [];
+  const st = payload.stats || { by_source: {}, by_type: {}, total: 0 };
+  document.getElementById('lb-tag').textContent =
+    `${events.length} BLOCKED · ${Object.keys(st.by_source).length} SOURCES`;
+
+  const renderKv = (obj, color) => {
+    const keys = Object.keys(obj);
+    if (!keys.length) {
+      return '<span style="color:var(--muted)">(none yet)</span>';
+    }
+    return keys.sort((a,b)=>obj[b]-obj[a]).map(k => `
+      <div style="display:flex;justify-content:space-between;gap:10px">
+        <span style="color:${color}">${k}</span>
+        <span style="color:var(--text)">${obj[k]}</span>
+      </div>`).join('');
+  };
+  document.getElementById('lb-by-source').innerHTML =
+    renderKv(st.by_source || {}, '#00c8ff');
+  document.getElementById('lb-by-type').innerHTML =
+    renderKv(st.by_type || {}, '#ffb800');
+
+  const tbody = document.getElementById('lb-tbody');
+  if (!events.length) {
+    tbody.innerHTML = `
+      <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:24px">
+        Nothing blocked yet — try visiting a phishing or invalid-cert site in Chrome.
+      </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = events.map(e => {
+    const when = new Date((e.timestamp || 0) * 1000).toLocaleTimeString();
+    const col = lbTypeColor(e.block_type);
+    return `
+      <tr>
+        <td class="domain">${e.domain}</td>
+        <td>${lbSourceBadge(e.source)}</td>
+        <td style="font-family:var(--mono);font-size:0.72rem">
+          <span style="color:${col};font-weight:700">${e.block_type}</span>
+          <div class="muted" style="color:var(--muted);font-size:0.68rem;margin-top:2px">
+            ${(e.error_message || '').slice(0, 110)}
+          </div>
+        </td>
+        <td class="muted">${when}</td>
+      </tr>`;
+  }).join('');
+}
+async function loadLaptopBlocks() {
   try {
-    const r = await fetch('/api/blocklist');
+    const r = await fetch('/api/system-blocks?limit=80');
     const d = await r.json();
-    document.getElementById('hc-tag').textContent =
-      `${d.phishing_count} / ${d.safe_count}`;
-    document.getElementById('hc-block-count').textContent = d.phishing_count;
-    document.getElementById('hc-safe-count').textContent = d.safe_count;
-    document.getElementById('hc-block-list').innerHTML =
-      d.phishing.map(x => `<div>• ${x}</div>`).join('');
-    document.getElementById('hc-safe-list').innerHTML =
-      d.safe.map(x => `<div>• ${x}</div>`).join('');
+    if (d.enabled === false) {
+      document.getElementById('lb-tag').textContent = 'MONITOR OFFLINE';
+      return;
+    }
+    renderLaptopBlocks(d);
   } catch(e) { console.error(e); }
 }
+async function rescanLaptop() {
+  const btn = document.getElementById('lb-rescan-btn');
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = '… scanning';
+  try {
+    const r = await fetch('/api/system-blocks/rescan', { method: 'POST' });
+    const d = await r.json();
+    await loadLaptopBlocks();
+    btn.textContent = `+${d.new || 0} new`;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1500);
+  } catch(e) {
+    btn.textContent = 'error';
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1500);
+  }
+}
 
-// ── Test-a-domain interactive demo ───────────────────────────────
+// ── Search-a-domain interactive demo ─────────────────────────────
 function quickTest(domain) {
   document.getElementById('test-input').value = domain;
   runTest();
 }
 
+function _openSite(domain) {
+  // Strip any user-supplied scheme to avoid javascript: etc., then force https
+  const clean = String(domain).replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\\/\\//, '');
+  window.open('https://' + clean, '_blank', 'noopener,noreferrer');
+}
+
 async function runTest() {
   const el = document.getElementById('test-input');
   const out = document.getElementById('test-result');
-  const domain = (el.value || '').trim();
+  let domain = (el.value || '').trim();
   if (!domain) {
-    out.innerHTML = '<span style="color:var(--red)">Please enter a domain.</span>';
+    out.innerHTML = '<span style="color:var(--red)">Please enter a website.</span>';
     return;
   }
-  out.innerHTML = '<span style="color:var(--cyan)">⏳ Checking ' + domain + ' ...</span>';
+  // Strip http(s):// and trailing path if user pasted a full URL
+  domain = domain.replace(/^https?:\\/\\//i, '').split('/')[0].toLowerCase();
+
+  out.innerHTML = '<span style="color:var(--cyan)">⏳ Scanning ' + domain + ' ...</span>';
   try {
     const r = await fetch('/api/check?domain=' + encodeURIComponent(domain));
     const d = await r.json();
@@ -1989,68 +2300,105 @@ async function runTest() {
       out.innerHTML = '<span style="color:var(--red)">' + d.error + '</span>';
       return;
     }
-    let color = '#4a6a8a', icon = '❔', label = 'UNKNOWN';
-    if (d.verdict === 'phishing') { color = '#ff3d5a'; icon = '🛑'; label = 'PHISHING — BLOCKED'; }
-    else if (d.verdict === 'legitimate') { color = '#00ff9d'; icon = '✅'; label = 'LEGITIMATE — ALLOWED'; }
-    else { color = '#ffb800'; icon = '🤖'; label = 'NOT IN LIST — ML WOULD DECIDE'; }
 
+    const conf = Number(d.confidence || 0);
+    const verdict = d.verdict;
+    const reason = d.reason || 'no reason given';
+    const pct = (conf * 100).toFixed(0);
+
+    // ── PHISHING → block immediately, show error ─────────────────
+    if (verdict === 'phishing') {
+      out.innerHTML = `
+        <div style="background:rgba(255,61,90,0.10);border:1px solid var(--red);border-radius:4px;padding:14px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:1.6rem">🚫</span>
+            <span style="font-weight:700;color:var(--red);letter-spacing:0.08em;font-size:0.95rem">BLOCKED — PHISHING DETECTED</span>
+          </div>
+          <div style="color:var(--text);margin-bottom:6px"><b>${d.domain}</b> was blocked for your safety.</div>
+          <div style="color:var(--muted);margin-bottom:4px"><b>Confidence:</b> ${pct}%</div>
+          <div style="color:var(--muted)"><b>Reason:</b> ${reason}</div>
+        </div>`;
+      return;
+    }
+
+    // ── LEGITIMATE with high confidence → open the site ──────────
+    if (verdict === 'legitimate' && conf >= 0.7) {
+      out.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="font-size:1.4rem">✅</span>
+          <span style="font-weight:700;color:var(--green);letter-spacing:0.06em">SAFE — Opening site</span>
+        </div>
+        <div style="color:var(--text);margin-bottom:6px"><b>${d.domain}</b> looks legitimate (${pct}% confidence).</div>
+        <div style="color:var(--muted)"><b>Reason:</b> ${reason}</div>`;
+      _openSite(d.domain);
+      return;
+    }
+
+    // ── LOW CONFIDENCE / UNKNOWN → warn, ask to continue ─────────
+    const warnMsg = `⚠ PhishGuard is not sure about "${d.domain}".\n\n` +
+                    `Verdict: ${verdict || 'unknown'} (${pct}% confidence)\n` +
+                    `Reason: ${reason}\n\n` +
+                    `Continue at your own risk?`;
     out.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <span style="font-size:1.3rem">${icon}</span>
-        <span style="font-weight:700;color:${color};letter-spacing:0.06em">${label}</span>
-      </div>
-      <div style="color:var(--text);margin-bottom:6px"><b>Domain:</b> ${d.domain}</div>
-      <div style="color:var(--muted);margin-bottom:6px"><b>Source:</b> ${d.source}</div>
-      <div style="color:var(--muted);margin-bottom:6px"><b>Confidence:</b> ${(d.confidence*100).toFixed(0)}%</div>
-      <div style="color:var(--muted)"><b>Reason:</b> ${d.reason}</div>
-    `;
+      <div style="background:rgba(255,184,0,0.08);border:1px solid var(--amber);border-radius:4px;padding:14px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="font-size:1.4rem">⚠</span>
+          <span style="font-weight:700;color:var(--amber);letter-spacing:0.06em">LOW CONFIDENCE — REVIEW NEEDED</span>
+        </div>
+        <div style="color:var(--text);margin-bottom:6px"><b>${d.domain}</b> could not be confirmed as safe.</div>
+        <div style="color:var(--muted);margin-bottom:4px"><b>Verdict:</b> ${verdict || 'unknown'} · <b>Confidence:</b> ${pct}%</div>
+        <div style="color:var(--muted)"><b>Reason:</b> ${reason}</div>
+      </div>`;
+    if (window.confirm(warnMsg)) {
+      _openSite(d.domain);
+    }
   } catch(e) {
     out.innerHTML = '<span style="color:var(--red)">Error: ' + e + '</span>';
   }
 }
 
 refresh();
-loadHardcoded();
+loadLaptopBlocks();
 setInterval(refresh, 2000);
-setInterval(loadHardcoded, 30000);
+setInterval(loadLaptopBlocks, 5000);
 </script>
 </body>
 </html>"""
 
 
-@app.route('/')
+@app.get('/', response_class=HTMLResponse)
 def home():
     """Home / landing page"""
-    return render_template_string(HOME_HTML)
+    return HOME_HTML
 
 
-@app.route('/dashboard')
+@app.get('/dashboard', response_class=HTMLResponse)
 def dashboard():
     """Live dashboard page"""
-    return render_template_string(DASHBOARD_HTML)
+    return DASHBOARD_HTML
 
 
-@app.route('/api/blocklist')
+@app.get('/api/blocklist')
 def get_blocklist():
     """Return hardcoded blocklist + allowlist for transparency in the UI."""
-    return jsonify({
+    return {
         'phishing_count': len(HARDCODED_PHISHING_DOMAINS),
         'safe_count': len(HARDCODED_SAFE_DOMAINS),
         'phishing': sorted(HARDCODED_PHISHING_DOMAINS),
         'safe': sorted(HARDCODED_SAFE_DOMAINS),
-    })
+    }
 
 
-@app.route('/api/check')
-def check_domain():
+@app.get('/api/check')
+def check_domain(domain: str = Query("", description="Domain to classify")):
     """
     On-demand domain classification using the same hardcoded rules the
     engine applies. Great for live demos: type a domain, see instant verdict.
     Query: /api/check?domain=paypal-verify.com
     """
-    domain = (request.args.get('domain') or '').strip().lower()
+    domain = (domain or '').strip().lower()
     if not domain:
-        return jsonify({'error': 'missing domain parameter'}), 400
+        return JSONResponse({'error': 'missing domain parameter'}, status_code=400)
 
     # Strip scheme + path if user pasted a URL
     if '://' in domain:
@@ -2063,8 +2411,8 @@ def check_domain():
             'verdict': 'phishing',
             'blocked': True,
             'confidence': 1.0,
+            'reason': 'Domain matches a known phishing pattern — REJECT.',
             'source': 'hardcoded_blocklist',
-            'reason': 'Domain matches the hardcoded phishing blocklist.',
             'ml_ran': False,
         }
     elif _matches_hardcoded(domain, HARDCODED_SAFE_DOMAINS):
@@ -2073,39 +2421,180 @@ def check_domain():
             'verdict': 'legitimate',
             'blocked': False,
             'confidence': 1.0,
+            'reason': 'Domain is recognised as trusted — APPROVE.',
             'source': 'hardcoded_allowlist',
-            'reason': 'Domain is on the hardcoded trusted allowlist.',
             'ml_ran': False,
         }
     else:
-        verdict = {
-            'domain': domain,
-            'verdict': 'unknown',
-            'blocked': False,
-            'confidence': 0.0,
-            'source': 'ml_model',
-            'reason': 'Not in hardcoded lists — would be evaluated by the ML model in the live engine.',
-            'ml_ran': False,
-        }
-    return jsonify(verdict)
+        # ── Not on either list → first check threat-intel feeds ─────────
+        # (Google Safe Browsing + PhishTank + OpenPhish). This is the
+        # primary detection path — the ML model is only consulted if all
+        # three feeds say "unknown".
+        rep_verdict = None
+        try:
+            from modules.reputation_check import get_default_checker
+            rep_verdict = get_default_checker().check(domain)
+        except Exception as e:
+            logger.debug(f"reputation check failed for {domain}: {e}")
+
+        if rep_verdict is not None and rep_verdict.verdict == 'phishing':
+            verdict = {
+                'domain': domain,
+                'verdict': 'phishing',
+                'blocked': True,
+                'confidence': rep_verdict.confidence,
+                'reason': rep_verdict.reason,
+                'source': rep_verdict.source,
+                'threat_type': rep_verdict.threat_type,
+                'ml_ran': False,
+            }
+        elif rep_verdict is not None and rep_verdict.verdict == 'legitimate':
+            verdict = {
+                'domain': domain,
+                'verdict': 'legitimate',
+                'blocked': False,
+                'confidence': rep_verdict.confidence,
+                'reason': rep_verdict.reason,
+                'source': rep_verdict.source,
+                'ml_ran': False,
+            }
+        else:
+            # ── Feeds said unknown → fall back to ML model + heuristic ──
+            ml_label: str = ""
+            ml_conf: float = 0.0
+            ml_ran = False
+            engine = _get_ml_engine()
+            if engine is not None:
+                try:
+                    # Use a placeholder IP; the model's domain-based features
+                    # carry the signal we need for a quick test.
+                    pred = engine.predict(domain, "0.0.0.0")
+                    ml_label = pred.prediction
+                    ml_conf = float(pred.confidence or 0.0)
+                    ml_ran = True
+                except Exception as e:
+                    logger.debug(f"/api/check ML predict failed for {domain}: {e}")
+
+            # Heuristic always runs as a second opinion / fallback
+            heur_score, heur_reasons = _heuristic_phishing_score(domain)
+
+            # Combine: REJECT if either signal is confidently phishing
+            is_phish_ml = ml_ran and ml_label == "phishing" and ml_conf >= 0.6
+            is_phish_heur = heur_score >= 0.55
+
+            if is_phish_ml or is_phish_heur:
+                conf = max(ml_conf if is_phish_ml else 0.0, heur_score)
+                parts = []
+                if is_phish_ml:
+                    parts.append(f"ML model says PHISHING ({ml_conf*100:.0f}% confidence)")
+                if heur_reasons:
+                    parts.append("Signals: " + "; ".join(heur_reasons[:4]))
+                verdict = {
+                    'domain': domain,
+                    'verdict': 'phishing',
+                    'blocked': True,
+                    'confidence': conf,
+                    'reason': " · ".join(parts) or "Matches phishing patterns — REJECT.",
+                    'source': 'ml_model' if is_phish_ml else 'heuristic',
+                    'ml_ran': ml_ran,
+                }
+            elif ml_ran and ml_label == "legitimate" and ml_conf >= 0.7 and heur_score < 0.3:
+                verdict = {
+                    'domain': domain,
+                    'verdict': 'legitimate',
+                    'blocked': False,
+                    'confidence': ml_conf,
+                    'reason': f"ML model says LEGITIMATE ({ml_conf*100:.0f}% confidence) — APPROVE.",
+                    'source': 'ml_model',
+                    'ml_ran': True,
+                }
+            else:
+                note = []
+                if ml_ran:
+                    note.append(f"ML: {ml_label} ({ml_conf*100:.0f}%)")
+                elif _ML_ENGINE_ERROR:
+                    note.append("ML model unavailable")
+                if heur_reasons:
+                    note.append("Signals: " + "; ".join(heur_reasons[:3]))
+                verdict = {
+                    'domain': domain,
+                    'verdict': 'unknown',
+                    'blocked': False,
+                    'confidence': max(ml_conf, heur_score),
+                    'reason': " · ".join(note) or "Domain not recognised — needs review.",
+                    'source': 'none',
+                    'ml_ran': ml_ran,
+                }
+
+    # ── Log every verdict (except 'unknown') so the dashboard graphs and
+    #    latest-feeds reflect what's been tested. The background collector
+    #    picks the JSONL up within ~1 second.
+    if verdict.get('verdict') in ('phishing', 'legitimate'):
+        _log_detection_event(
+            domain=verdict['domain'],
+            verdict=verdict['verdict'],
+            confidence=verdict.get('confidence', 0.0),
+            reason=verdict.get('reason', ''),
+            source=verdict.get('source', 'api_check'),
+            blocked=verdict.get('blocked', False),
+        )
+    return verdict
 
 
-@app.route('/api/stats')
+@app.get('/api/stats')
 def get_stats():
     """API endpoint for stats"""
+    laptop_blocks: list = []
+    laptop_stats: dict = {'total': 0, 'by_source': {}, 'by_type': {}}
+    if _LAPTOP_MONITOR is not None:
+        try:
+            laptop_blocks = _LAPTOP_MONITOR.recent_blocks(limit=50)
+            laptop_stats = _LAPTOP_MONITOR.stats()
+        except Exception as e:
+            logger.debug(f"laptop monitor read failed: {e}")
     with stats_lock:
-        return jsonify({
+        return {
             'total_packets': stats['total_packets'],
             'total_phishing': stats['total_phishing'],
-            'total_blocked': stats['total_blocked'],
+            'total_blocked': stats['total_blocked'] + laptop_stats['total'],
+            'engine_blocked': stats['total_blocked'],
+            'laptop_blocked': laptop_stats['total'],
             'total_safe': stats['total_safe'],
             'detection_rate': stats['detection_rate'],
             'latest_detections': list(stats['latest_detections']),
             'latest_blocks': list(stats['latest_blocks']),
             'latest_safe': list(stats['latest_safe']),
             'blocked_domains': stats['blocked_domains'],
+            'laptop_blocks': laptop_blocks,
+            'laptop_stats': laptop_stats,
             'uptime': (datetime.now() - stats['start_time']).total_seconds(),
-        })
+        }
+
+
+@app.get('/api/system-blocks')
+def get_system_blocks(limit: int = Query(100, ge=1, le=1000)):
+    """Return everything Chrome / the OS has already blocked on this machine."""
+    if _LAPTOP_MONITOR is None:
+        return {'enabled': False, 'events': [], 'stats': {}}
+    return {
+        'enabled': True,
+        'events': _LAPTOP_MONITOR.recent_blocks(limit=limit),
+        'stats': _LAPTOP_MONITOR.stats(),
+    }
+
+
+@app.post('/api/system-blocks/rescan')
+@app.get('/api/system-blocks/rescan')
+def rescan_system_blocks():
+    """Force an immediate scan + probe pass."""
+    if _LAPTOP_MONITOR is None:
+        return JSONResponse({'enabled': False, 'new': 0}, status_code=503)
+    found = _LAPTOP_MONITOR.scan_once()
+    return {
+        'enabled': True,
+        'new': len(found),
+        'events': [e.to_dict() for e in found],
+    }
 
 
 def background_data_collection():
@@ -2127,7 +2616,7 @@ if __name__ == '__main__':
     import argparse
    
     parser = argparse.ArgumentParser(description='Phishing Detection Dashboard')
-    parser.add_argument('--port', type=int, default=5000, help='Port to run dashboard on')
+    parser.add_argument('--port', type=int, default=5001, help='Port to run dashboard on')
     args = parser.parse_args()
    
     logger.info("=" * 70)
@@ -2141,6 +2630,17 @@ if __name__ == '__main__':
     # Start background data collection
     collector_thread = threading.Thread(target=background_data_collection, daemon=True)
     collector_thread.start()
+
+    # Start Chrome / laptop block monitor in the background so the dashboard
+    # picks up SSL errors, hosts-file blocks, blocked downloads, etc. without
+    # the user having to refresh manually.
+    if _LAPTOP_MONITOR is not None:
+        try:
+            _LAPTOP_MONITOR.start_background(interval=20)
+            logger.info("✓ Chrome/Laptop block monitor running (every 20s)")
+        except Exception as e:
+            logger.warning(f"Could not start laptop block monitor: {e}")
    
-    # Start Flask app
-    app.run(debug=False, host='0.0.0.0', port=args.port, use_reloader=False)
+    # Start FastAPI app via uvicorn
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=args.port, log_level='info')
